@@ -65,7 +65,8 @@ struct Palette {
 };
 
 constexpr std::array<Palette, filehash::ui::kThemes.size()> kPalettes{{
-    {RGB(248, 250, 252), RGB(255, 255, 255), RGB(241, 245, 249), RGB(15, 23, 42), RGB(100, 116, 139), RGB(226, 232, 240), RGB(37, 99, 235), RGB(255, 255, 255), RGB(219, 234, 254), RGB(15, 23, 42), RGB(226, 232, 240), RGB(22, 163, 74), RGB(220, 38, 38), RGB(241, 245, 249), RGB(148, 163, 184), RGB(248, 250, 252)},
+    // 中文：Arctic Blue 使用可见的冰蓝色层级，避免窗口退化为默认白色 / English: Arctic Blue uses visible icy-blue layers instead of default white
+    {RGB(226, 238, 252), RGB(244, 249, 255), RGB(220, 233, 248), RGB(16, 43, 74), RGB(57, 88, 122), RGB(99, 139, 181), RGB(26, 98, 210), RGB(255, 255, 255), RGB(176, 209, 255), RGB(16, 43, 74), RGB(197, 220, 246), RGB(19, 122, 69), RGB(180, 35, 24), RGB(214, 227, 242), RGB(110, 134, 160), RGB(215, 234, 255)},
     {RGB(17, 24, 39), RGB(31, 41, 55), RGB(24, 34, 49), RGB(229, 231, 235), RGB(156, 163, 175), RGB(55, 65, 81), RGB(34, 211, 238), RGB(15, 23, 42), RGB(15, 108, 189), RGB(255, 255, 255), RGB(55, 65, 81), RGB(74, 222, 128), RGB(248, 113, 113), RGB(31, 41, 55), RGB(107, 114, 128), RGB(21, 31, 46)},
     {RGB(255, 251, 245), RGB(255, 255, 255), RGB(255, 247, 237), RGB(38, 50, 56), RGB(99, 115, 124), RGB(232, 219, 204), RGB(232, 121, 46), RGB(255, 255, 255), RGB(253, 230, 209), RGB(38, 50, 56), RGB(241, 225, 207), RGB(46, 125, 50), RGB(211, 47, 47), RGB(247, 243, 238), RGB(158, 158, 158), RGB(255, 250, 244)},
     {RGB(245, 250, 248), RGB(255, 255, 255), RGB(237, 247, 243), RGB(23, 53, 47), RGB(102, 122, 116), RGB(207, 226, 220), RGB(15, 157, 131), RGB(255, 255, 255), RGB(217, 243, 236), RGB(23, 53, 47), RGB(207, 226, 220), RGB(15, 157, 131), RGB(211, 47, 47), RGB(237, 244, 242), RGB(139, 157, 152), RGB(247, 252, 250)},
@@ -113,6 +114,8 @@ struct State {
     HBRUSH surface_brush = nullptr;
     HBRUSH drop_zone_brush = nullptr;
     filehash::ui::ThemeId theme = filehash::ui::ThemeId::ArcticBlue;
+    // 中文：显式保存复选框状态，确保自绘控件在 Windows 7/10/11 上一致显示 / English: Keep checkbox state explicitly so owner-drawn controls render consistently on Windows 7/10/11
+    std::array<bool, 6> algorithm_checked{{false, true, false, true, false, false}};
     std::vector<Row> rows;
     std::uint64_t next_id = 1;
 };
@@ -294,10 +297,69 @@ void draw_drop_zone(const State& state, const DRAWITEMSTRUCT& item) {
     DrawTextW(item.hDC, text, -1, &text_rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 }
 
+void draw_algorithm_group(const State& state, const DRAWITEMSTRUCT& item) {
+    const auto& colors = palette(state);
+    FillRect(item.hDC, &item.rcItem, state.surface_brush);
+    HPEN pen = CreatePen(PS_SOLID, 1, colors.border);
+    const HGDIOBJ old_pen = SelectObject(item.hDC, pen);
+    const HGDIOBJ old_brush = SelectObject(item.hDC, GetStockObject(NULL_BRUSH));
+    Rectangle(item.hDC, item.rcItem.left, item.rcItem.top + 5, item.rcItem.right - 1, item.rcItem.bottom - 1);
+    SelectObject(item.hDC, old_brush);
+    SelectObject(item.hDC, old_pen);
+    DeleteObject(pen);
+
+    RECT label{item.rcItem.left + 8, item.rcItem.top, item.rcItem.left + 92, item.rcItem.top + 14};
+    FillRect(item.hDC, &label, state.surface_brush);
+    wchar_t text[64]{};
+    GetWindowTextW(item.hwndItem, text, ARRAYSIZE(text));
+    SetBkMode(item.hDC, TRANSPARENT);
+    SetTextColor(item.hDC, colors.text_primary);
+    DrawTextW(item.hDC, text, -1, &label, DT_LEFT | DT_SINGLELINE);
+}
+
+void draw_algorithm_checkbox(const State& state, const DRAWITEMSTRUCT& item, const int index) {
+    const auto& colors = palette(state);
+    const bool disabled = (item.itemState & ODS_DISABLED) != 0;
+    const bool checked = state.algorithm_checked[index];
+    const COLORREF box_color = disabled ? colors.disabled_bg : (checked ? colors.primary : colors.surface);
+    const COLORREF border_color = disabled ? colors.border : (checked ? colors.primary : colors.border);
+    const COLORREF text_color = disabled ? colors.disabled_text : colors.text_primary;
+
+    FillRect(item.hDC, &item.rcItem, state.surface_brush);
+    RECT box{item.rcItem.left + 1, item.rcItem.top + 3, item.rcItem.left + 14, item.rcItem.top + 16};
+    HBRUSH box_brush = CreateSolidBrush(box_color);
+    FillRect(item.hDC, &box, box_brush);
+    DeleteObject(box_brush);
+    HPEN box_pen = CreatePen(PS_SOLID, 1, border_color);
+    const HGDIOBJ old_pen = SelectObject(item.hDC, box_pen);
+    const HGDIOBJ old_brush = SelectObject(item.hDC, GetStockObject(NULL_BRUSH));
+    Rectangle(item.hDC, box.left, box.top, box.right, box.bottom);
+    if (checked) {
+        HPEN check_pen = CreatePen(PS_SOLID, 1, colors.primary_text);
+        const HGDIOBJ previous_pen = SelectObject(item.hDC, check_pen);
+        MoveToEx(item.hDC, box.left + 3, box.top + 6, nullptr);
+        LineTo(item.hDC, box.left + 6, box.bottom - 3);
+        LineTo(item.hDC, box.right - 3, box.top + 3);
+        SelectObject(item.hDC, previous_pen);
+        DeleteObject(check_pen);
+    }
+    SelectObject(item.hDC, old_brush);
+    SelectObject(item.hDC, old_pen);
+    DeleteObject(box_pen);
+
+    wchar_t text[64]{};
+    GetWindowTextW(item.hwndItem, text, ARRAYSIZE(text));
+    RECT text_rect = item.rcItem;
+    text_rect.left += 20;
+    SetBkMode(item.hDC, TRANSPARENT);
+    SetTextColor(item.hDC, text_color);
+    DrawTextW(item.hDC, text, -1, &text_rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
+
 std::vector<filehash::HashAlgorithm> selected_algorithms(const State& state) {
     std::vector<filehash::HashAlgorithm> result;
     for (int index = 0; index < 6; ++index) {
-        if (SendMessageW(state.checks[index], BM_GETCHECK, 0, 0) == BST_CHECKED) result.push_back(kAlgorithms[index]);
+        if (state.algorithm_checked[index]) result.push_back(kAlgorithms[index]);
     }
     return result;
 }
@@ -679,12 +741,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             state->cancel_all = CreateWindowW(L"BUTTON", L"Cancel all", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCancelAll), nullptr, nullptr);
             state->clean_all = CreateWindowW(L"BUTTON", L"Clean all", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCleanAll), nullptr, nullptr);
             state->theme_picker = CreateWindowW(L"BUTTON", L"Theme", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kThemePicker), nullptr, nullptr);
-            state->algorithm_group = CreateWindowW(L"BUTTON", L"Algorithms", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 0, 0, 0, 0, window, nullptr, nullptr, nullptr);
+            state->algorithm_group = CreateWindowW(L"STATIC", L"Algorithms", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 0, 0, 0, 0, window, nullptr, nullptr, nullptr);
             for (int index = 0; index < 6; ++index) {
-                state->checks[index] = CreateWindowW(L"BUTTON", widen(filehash::algorithm_name(kAlgorithms[index])).c_str(), WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kAlgorithmBase + index), nullptr, nullptr);
+                state->checks[index] = CreateWindowW(L"BUTTON", widen(filehash::algorithm_name(kAlgorithms[index])).c_str(), WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | BS_OWNERDRAW, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kAlgorithmBase + index), nullptr, nullptr);
             }
-            SendMessageW(state->checks[1], BM_SETCHECK, BST_CHECKED, 0);
-            SendMessageW(state->checks[3], BM_SETCHECK, BST_CHECKED, 0);
             state->drop_hint = CreateWindowW(L"STATIC", L"Drop files anywhere in this window — each file starts independently", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 0, 0, 0, 0, window, nullptr, nullptr, nullptr);
             state->file_progress_label = CreateWindowW(L"STATIC", L"File progress  0%", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window, nullptr, nullptr, nullptr);
             state->file_progress = CreateWindowExW(0, PROGRESS_CLASSW, L"", WS_CHILD | WS_VISIBLE | PBS_SMOOTH, 0, 0, 0, 0, window, nullptr, nullptr, nullptr);
@@ -727,6 +787,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 case kThemePicker: show_theme_menu(*state); return 0;
                 default:
                     if (LOWORD(wparam) >= kAlgorithmBase && LOWORD(wparam) < kAlgorithmBase + 6 && HIWORD(wparam) == BN_CLICKED) {
+                        const int index = LOWORD(wparam) - kAlgorithmBase;
+                        state->algorithm_checked[index] = !state->algorithm_checked[index];
+                        InvalidateRect(state->checks[index], nullptr, FALSE);
                         for (const auto& row : state->rows) if (!row.job) start_file(*state, row.id);
                         update_action_buttons(*state);
                         update_summary(*state);
@@ -741,6 +804,16 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             if (item->hwndItem == state->drop_hint) {
                 draw_drop_zone(*state, *item);
                 return TRUE;
+            }
+            if (item->hwndItem == state->algorithm_group) {
+                draw_algorithm_group(*state, *item);
+                return TRUE;
+            }
+            for (int index = 0; index < 6; ++index) {
+                if (item->hwndItem == state->checks[index]) {
+                    draw_algorithm_checkbox(*state, *item, index);
+                    return TRUE;
+                }
             }
             if (item->hwndItem == state->add_files || item->hwndItem == state->copy_results ||
                 item->hwndItem == state->delete_files || item->hwndItem == state->cancel_all ||

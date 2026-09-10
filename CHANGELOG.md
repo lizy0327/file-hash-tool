@@ -8,6 +8,7 @@
 - 新增主题即时切换与本地记忆，重新启动后恢复上次使用的主题。
 - 将普通拖放提示升级为带文件图标、主题色边框和独立背景的拖放卡片。
 - 统一主按钮、危险操作、禁用状态、进度条、选中行和结果表格的语义化配色。
+- 加深 Arctic Blue 的冰蓝色层级，避免默认主题看起来接近白色界面。
 
 ### English
 
@@ -15,6 +16,7 @@
 - Adds instant theme switching and local persistence across launches.
 - Replaces the plain drag hint with a file-icon drop-zone card using the active theme's border and surface colors.
 - Unifies semantic colors for the primary action, destructive action, disabled state, progress bars, selected rows, and results table.
+- Deepens the Arctic Blue layers so the default theme no longer looks like a near-white interface.
 
 ## 1.0.0 — 2026-09-10
 
