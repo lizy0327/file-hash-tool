@@ -1,0 +1,28 @@
+# 中文：构建目录和中间文件不提交 / English: Ignore build directories and intermediate files
+build*/
+cmake-build*/
+out/
+dist/
+
+# 中文：编译产物不提交 / English: Ignore compiled artifacts
+*.exe
+*.dll
+*.pdb
+*.obj
+*.lib
+*.exp
+*.ilk
+*.res
+*.o
+*.a
+*.so
+*.dylib
+
+# 中文：IDE 和系统文件不提交 / English: Ignore IDE and system files
+.vs/
+.vscode/
+.idea/
+.DS_Store
+*.user
+*.suo
+*.swp

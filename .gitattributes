@@ -1,0 +1,8 @@
+# 中文：统一文本文件的换行和编码处理 / English: Normalize text file handling
+* text=auto
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.cpp text working-tree-encoding=UTF-8
+*.h text working-tree-encoding=UTF-8
+*.md text working-tree-encoding=UTF-8
+*.yml text working-tree-encoding=UTF-8
