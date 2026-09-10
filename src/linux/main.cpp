@@ -1,14 +1,18 @@
 #include "app/result_text.h"
 #include "app/file_metadata.h"
+#include "app/theme.h"
 #include "core/hash_engine.h"
 
 #include <gtk/gtk.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -20,6 +24,34 @@ const filehash::HashAlgorithm kAlgorithms[] = {
     filehash::HashAlgorithm::Crc32, filehash::HashAlgorithm::Md5, filehash::HashAlgorithm::Sha1,
     filehash::HashAlgorithm::Sha256, filehash::HashAlgorithm::Sha384, filehash::HashAlgorithm::Sha512,
 };
+
+struct Palette {
+    const char* window_bg;
+    const char* surface;
+    const char* surface_alt;
+    const char* text_primary;
+    const char* text_secondary;
+    const char* border;
+    const char* primary;
+    const char* primary_text;
+    const char* selection;
+    const char* selection_text;
+    const char* progress_track;
+    const char* success;
+    const char* danger;
+    const char* disabled_bg;
+    const char* disabled_text;
+    const char* drop_zone_bg;
+};
+
+constexpr std::array<Palette, filehash::ui::kThemes.size()> kPalettes{{
+    {"#f8fafc", "#ffffff", "#f1f5f9", "#0f172a", "#64748b", "#e2e8f0", "#2563eb", "#ffffff", "#dbeafe", "#0f172a", "#e2e8f0", "#16a34a", "#dc2626", "#f1f5f9", "#94a3b8", "#f8fafc"},
+    {"#111827", "#1f2937", "#182231", "#e5e7eb", "#9ca3af", "#374151", "#22d3ee", "#0f172a", "#0f6cbd", "#ffffff", "#374151", "#4ade80", "#f87171", "#1f2937", "#6b7280", "#151f2e"},
+    {"#fffbf5", "#ffffff", "#fff7ed", "#263238", "#63737c", "#e8dbcc", "#e8792e", "#ffffff", "#fde6d1", "#263238", "#f1e1cf", "#2e7d32", "#d32f2f", "#f7f3ee", "#9e9e9e", "#fffaf4"},
+    {"#f5faf8", "#ffffff", "#edf7f3", "#17352f", "#667a74", "#cfe2dc", "#0f9d83", "#ffffff", "#d9f3ec", "#17352f", "#cfe2dc", "#0f9d83", "#d32f2f", "#edf4f2", "#8b9d98", "#f7fcfa"},
+    {"#faf9ff", "#ffffff", "#f6f3ff", "#29233f", "#716a84", "#ddd7ee", "#7157d9", "#ffffff", "#e9e3ff", "#29233f", "#e1dcf2", "#2e7d32", "#d32f2f", "#f5f3fa", "#9c96ac", "#fcfaff"},
+    {"#171717", "#232323", "#1d1d1d", "#f4f1ea", "#aaa69d", "#45423d", "#f2a93b", "#171717", "#5b421c", "#fff8e5", "#45423d", "#4ade80", "#f87171", "#282828", "#75736e", "#1e1e1e"},
+}};
 
 struct State;
 struct Job { std::shared_ptr<std::atomic<bool>> cancel; std::thread worker; };
@@ -42,6 +74,7 @@ struct State {
     GtkWidget* delete_button = nullptr;
     GtkWidget* cancel_button = nullptr;
     GtkWidget* clean_button = nullptr;
+    GtkWidget* theme_combo = nullptr;
     GtkWidget* status = nullptr;
     GtkWidget* file_progress = nullptr;
     GtkWidget* progress = nullptr;
@@ -51,6 +84,8 @@ struct State {
     GtkTreeSelection* selection = nullptr;
     GtkListStore* store = nullptr;
     GtkWidget* checks[6]{};
+    GtkCssProvider* css_provider = nullptr;
+    filehash::ui::ThemeId theme = filehash::ui::ThemeId::ArcticBlue;
     std::vector<Row> rows;
     std::uint64_t next_id = 1;
 };
@@ -485,31 +520,91 @@ gboolean on_close(GtkWidget*, GdkEvent*, gpointer data) {
     return FALSE;
 }
 
-void apply_css() {
-    const char* css =
-        "window { background: #e8f0fa; }"
-        ".title { font-size: 24px; font-weight: 700; color: #112d57; }"
-        ".subtitle, .hint, .status { color: #2f486a; }"
-        ".empty-hint { color: #2563eb; font-size: 18px; font-weight: 600; }"
-        ".algorithm-card, .results-card { background: #f5f9ff; border: 1px solid #c8d9ee; border-radius: 10px; padding: 10px; }"
-        ".primary { background: #2563eb; color: #ffffff; }"
-        "treeview { background: #eff6ff; color: #18304f; -GtkTreeView-horizontal-separator: 8; }"
-        "treeview.view { -GtkTreeView-grid-line-color: #000000; -GtkTreeView-grid-line-width: 1; }"
-        "treeview.view:selected { background: #b9d5fa; color: #112d57; }"
-        "progressbar trough { min-height: 10px; border-radius: 5px; background: #cfdef2; }"
-        "progressbar progress { min-height: 10px; border-radius: 5px; background: #2563eb; }";
-    GtkCssProvider* provider = gtk_css_provider_new();
-    gtk_css_provider_load_from_data(provider, css, -1, nullptr);
-    gtk_style_context_add_provider_for_screen(gdk_screen_get_default(), GTK_STYLE_PROVIDER(provider), GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
-    g_object_unref(provider);
+std::string settings_path() {
+    gchar* directory = g_build_filename(g_get_user_config_dir(), "lizy-file-hash-tool", nullptr);
+    gchar* path = g_build_filename(directory, "settings.conf", nullptr);
+    std::string result(path);
+    g_free(path);
+    g_free(directory);
+    return result;
+}
+
+filehash::ui::ThemeId load_theme() {
+    gchar* content = nullptr;
+    gsize length = 0;
+    const std::string path = settings_path();
+    if (!g_file_get_contents(path.c_str(), &content, &length, nullptr) || content == nullptr) {
+        return filehash::ui::ThemeId::ArcticBlue;
+    }
+    char* end = nullptr;
+    const unsigned long index = std::strtoul(content, &end, 10);
+    const bool valid = end != content && index < filehash::ui::kThemes.size();
+    g_free(content);
+    if (!valid) return filehash::ui::ThemeId::ArcticBlue;
+    return filehash::ui::theme_from_index(static_cast<std::size_t>(index));
+}
+
+void save_theme(const filehash::ui::ThemeId theme) {
+    gchar* directory = g_build_filename(g_get_user_config_dir(), "lizy-file-hash-tool", nullptr);
+    if (g_mkdir_with_parents(directory, 0700) == 0) {
+        gchar* path = g_build_filename(directory, "settings.conf", nullptr);
+        const std::string value = std::to_string(filehash::ui::theme_index(theme));
+        g_file_set_contents(path, value.c_str(), static_cast<gssize>(value.size()), nullptr);
+        g_free(path);
+    }
+    g_free(directory);
+}
+
+void apply_theme(State& state, const filehash::ui::ThemeId theme, const bool persist) {
+    state.theme = theme;
+    const auto& colors = kPalettes[filehash::ui::theme_index(theme)];
+    std::ostringstream css;
+    css
+        << "window { background: " << colors.window_bg << "; color: " << colors.text_primary << "; }"
+        << ".title { font-size: 24px; font-weight: 700; color: " << colors.text_primary << "; }"
+        << ".subtitle, .hint, .status, label { color: " << colors.text_secondary << "; }"
+        << ".empty-hint { color: " << colors.primary << "; font-size: 18px; font-weight: 600; }"
+        << ".algorithm-card, .results-card { background: " << colors.surface << "; border: 1px solid " << colors.border << "; border-radius: 8px; padding: 10px; }"
+        << ".drop-zone { background: " << colors.drop_zone_bg << "; border: 1px dashed " << colors.primary << "; border-radius: 8px; padding: 18px; }"
+        << "button { background: " << colors.surface << "; color: " << colors.text_primary << "; border: 1px solid " << colors.border << "; border-radius: 6px; padding: 7px 14px; }"
+        << "button:hover { background: " << colors.surface_alt << "; border-color: " << colors.primary << "; }"
+        << "button:disabled { background: " << colors.disabled_bg << "; color: " << colors.disabled_text << "; }"
+        << ".primary { background: " << colors.primary << "; color: " << colors.primary_text << "; border-color: " << colors.primary << "; }"
+        << ".danger { color: " << colors.danger << "; border-color: " << colors.danger << "; }"
+        << "combobox button { min-width: 135px; }"
+        << "menu, menuitem { background: " << colors.surface << "; color: " << colors.text_primary << "; }"
+        << "checkbutton { color: " << colors.text_primary << "; }"
+        << "treeview { background: " << colors.surface << "; color: " << colors.text_primary << "; -GtkTreeView-horizontal-separator: 8; }"
+        << "treeview.view { -GtkTreeView-grid-line-color: " << colors.border << "; -GtkTreeView-grid-line-width: 1; }"
+        << "treeview.view:selected { background: " << colors.selection << "; color: " << colors.selection_text << "; }"
+        << "header button { background: " << colors.surface_alt << "; color: " << colors.text_primary << "; }"
+        << "progressbar trough { min-height: 10px; border-radius: 5px; background: " << colors.progress_track << "; }"
+        << "progressbar progress { min-height: 10px; border-radius: 5px; background: " << colors.primary << "; }";
+
+    GdkScreen* screen = gdk_screen_get_default();
+    if (state.css_provider != nullptr) {
+        gtk_style_context_remove_provider_for_screen(screen, GTK_STYLE_PROVIDER(state.css_provider));
+        g_object_unref(state.css_provider);
+    }
+    state.css_provider = gtk_css_provider_new();
+    gtk_css_provider_load_from_data(state.css_provider, css.str().c_str(), -1, nullptr);
+    gtk_style_context_add_provider_for_screen(screen, GTK_STYLE_PROVIDER(state.css_provider),
+                                               GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+    if (persist) save_theme(theme);
+}
+
+void theme_changed(GtkComboBox* combo, gpointer data) {
+    State& state = *static_cast<State*>(data);
+    const int index = gtk_combo_box_get_active(combo);
+    if (index >= 0) apply_theme(state, filehash::ui::theme_from_index(static_cast<std::size_t>(index)), true);
 }
 
 }  // 命名空间 / Namespace
 
 int main(int argc, char** argv) {
     gtk_init(&argc, &argv);
-    apply_css();
     State state;
+    state.theme = load_theme();
     state.window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
     gtk_window_set_title(GTK_WINDOW(state.window), "Lizy File Hash Tool v1.0");
     gtk_window_set_default_size(GTK_WINDOW(state.window), 1200, 700);
@@ -545,16 +640,26 @@ int main(int argc, char** argv) {
     gtk_widget_set_sensitive(state.cancel_button, FALSE);
     gtk_widget_set_sensitive(state.clean_button, FALSE);
     gtk_style_context_add_class(gtk_widget_get_style_context(add), "primary");
-    gtk_box_pack_end(GTK_BOX(header), state.cancel_button, FALSE, FALSE, 0);
-    gtk_box_pack_end(GTK_BOX(header), state.delete_button, FALSE, FALSE, 0);
-    gtk_box_pack_end(GTK_BOX(header), state.copy_button, FALSE, FALSE, 0);
-    gtk_box_pack_end(GTK_BOX(header), state.clean_button, FALSE, FALSE, 0);
-    gtk_box_pack_end(GTK_BOX(header), add, FALSE, FALSE, 0);
+    gtk_style_context_add_class(gtk_widget_get_style_context(state.delete_button), "danger");
+    GtkWidget* actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
+    gtk_box_pack_end(GTK_BOX(header), actions, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(actions), add, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(actions), state.copy_button, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(actions), state.delete_button, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(actions), state.clean_button, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(actions), state.cancel_button, FALSE, FALSE, 0);
+    state.theme_combo = gtk_combo_box_text_new();
+    for (const auto& theme : filehash::ui::kThemes) {
+        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(state.theme_combo), theme.name);
+    }
+    gtk_combo_box_set_active(GTK_COMBO_BOX(state.theme_combo), static_cast<int>(filehash::ui::theme_index(state.theme)));
+    gtk_box_pack_start(GTK_BOX(actions), state.theme_combo, FALSE, FALSE, 0);
     g_signal_connect(add, "clicked", G_CALLBACK(choose_files), &state);
     g_signal_connect(state.copy_button, "clicked", G_CALLBACK(copy_results), &state);
     g_signal_connect(state.delete_button, "clicked", G_CALLBACK(delete_selected), &state);
     g_signal_connect(state.cancel_button, "clicked", G_CALLBACK(cancel_all), &state);
     g_signal_connect(state.clean_button, "clicked", G_CALLBACK(clean_all), &state);
+    g_signal_connect(state.theme_combo, "changed", G_CALLBACK(theme_changed), &state);
 
     GtkWidget* algorithms = gtk_frame_new("Algorithms");
     gtk_style_context_add_class(gtk_widget_get_style_context(algorithms), "algorithm-card");
@@ -571,10 +676,15 @@ int main(int argc, char** argv) {
         }), &state);
     }
     gtk_box_pack_start(GTK_BOX(root), algorithms, FALSE, FALSE, 0);
+    GtkWidget* drop_zone = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 12);
+    gtk_style_context_add_class(gtk_widget_get_style_context(drop_zone), "drop-zone");
+    GtkWidget* drop_icon = gtk_image_new_from_icon_name("document-open-symbolic", GTK_ICON_SIZE_LARGE_TOOLBAR);
     GtkWidget* hint = gtk_label_new("Drop files anywhere in this window — each file starts independently");
     gtk_style_context_add_class(gtk_widget_get_style_context(hint), "hint");
     gtk_label_set_xalign(GTK_LABEL(hint), 0.0F);
-    gtk_box_pack_start(GTK_BOX(root), hint, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(drop_zone), drop_icon, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(drop_zone), hint, TRUE, TRUE, 0);
+    gtk_box_pack_start(GTK_BOX(root), drop_zone, FALSE, FALSE, 0);
     GtkWidget* progress_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 4);
     state.file_progress_label = gtk_label_new("File  0%");
     state.progress_label = gtk_label_new("All files  0%");
@@ -601,6 +711,7 @@ int main(int argc, char** argv) {
     const int columns[] = {kPath, kStatus, kResult};
     for (int index = 0; index < 3; ++index) {
         GtkCellRenderer* renderer = gtk_cell_renderer_text_new();
+        if (index == 2) g_object_set(renderer, "family", "monospace", nullptr);
         GtkTreeViewColumn* column = gtk_tree_view_column_new_with_attributes(titles[index], renderer, "text", columns[index], nullptr);
         gtk_tree_view_column_set_resizable(column, TRUE);
         gtk_tree_view_column_set_expand(column, index != 1);
@@ -623,8 +734,10 @@ int main(int argc, char** argv) {
     gtk_label_set_xalign(GTK_LABEL(state.status), 0.0F);
     gtk_box_pack_start(GTK_BOX(root), state.status, FALSE, FALSE, 0);
 
+    apply_theme(state, state.theme, false);
     gtk_widget_show_all(state.window);
     gtk_main();
+    if (state.css_provider != nullptr) g_object_unref(state.css_provider);
     g_object_unref(state.store);
     return 0;
 }

@@ -1,5 +1,21 @@
 # 更新日志 / Changelog
 
+## Unreleased
+
+### 中文
+
+- Windows 和 Linux GUI 新增 Arctic Blue、Midnight Cyan、Warm Orange、Jade Mist、Violet Cloud 与 Graphite Amber 六套主题。
+- 新增主题即时切换与本地记忆，重新启动后恢复上次使用的主题。
+- 将普通拖放提示升级为带文件图标、主题色边框和独立背景的拖放卡片。
+- 统一主按钮、危险操作、禁用状态、进度条、选中行和结果表格的语义化配色。
+
+### English
+
+- Adds six themes to the Windows and Linux GUIs: Arctic Blue, Midnight Cyan, Warm Orange, Jade Mist, Violet Cloud, and Graphite Amber.
+- Adds instant theme switching and local persistence across launches.
+- Replaces the plain drag hint with a file-icon drop-zone card using the active theme's border and surface colors.
+- Unifies semantic colors for the primary action, destructive action, disabled state, progress bars, selected rows, and results table.
+
 ## 1.0.0 — 2026-09-10
 
 ### 中文

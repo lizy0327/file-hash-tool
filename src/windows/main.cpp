@@ -1,5 +1,6 @@
 #include "app/result_text.h"
 #include "app/file_metadata.h"
+#include "app/theme.h"
 #include "resource.h"
 #include "core/hash_engine.h"
 
@@ -9,6 +10,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <filesystem>
 #include <memory>
@@ -23,6 +25,7 @@ constexpr int kCopyResults = 1002;
 constexpr int kDeleteFiles = 1003;
 constexpr int kCancelAll = 1004;
 constexpr int kCleanAll = 1005;
+constexpr int kThemePicker = 1006;
 constexpr int kContextCopy = 2001;
 constexpr int kContextDelete = 2002;
 constexpr int kContextSelectAll = 2003;
@@ -32,6 +35,7 @@ constexpr int kProgress = 1102;
 constexpr int kTitle = 1103;
 constexpr int kSubtitle = 1104;
 constexpr int kAlgorithmBase = 1200;
+constexpr int kThemeBase = 1300;
 constexpr UINT kResultMessage = WM_APP + 1;
 constexpr UINT kProgressMessage = WM_APP + 2;
 constexpr UINT kFinishedMessage = WM_APP + 3;
@@ -40,6 +44,34 @@ const filehash::HashAlgorithm kAlgorithms[] = {
     filehash::HashAlgorithm::Crc32, filehash::HashAlgorithm::Md5, filehash::HashAlgorithm::Sha1,
     filehash::HashAlgorithm::Sha256, filehash::HashAlgorithm::Sha384, filehash::HashAlgorithm::Sha512,
 };
+
+struct Palette {
+    COLORREF window_bg;
+    COLORREF surface;
+    COLORREF surface_alt;
+    COLORREF text_primary;
+    COLORREF text_secondary;
+    COLORREF border;
+    COLORREF primary;
+    COLORREF primary_text;
+    COLORREF selection;
+    COLORREF selection_text;
+    COLORREF progress_track;
+    COLORREF success;
+    COLORREF danger;
+    COLORREF disabled_bg;
+    COLORREF disabled_text;
+    COLORREF drop_zone_bg;
+};
+
+constexpr std::array<Palette, filehash::ui::kThemes.size()> kPalettes{{
+    {RGB(248, 250, 252), RGB(255, 255, 255), RGB(241, 245, 249), RGB(15, 23, 42), RGB(100, 116, 139), RGB(226, 232, 240), RGB(37, 99, 235), RGB(255, 255, 255), RGB(219, 234, 254), RGB(15, 23, 42), RGB(226, 232, 240), RGB(22, 163, 74), RGB(220, 38, 38), RGB(241, 245, 249), RGB(148, 163, 184), RGB(248, 250, 252)},
+    {RGB(17, 24, 39), RGB(31, 41, 55), RGB(24, 34, 49), RGB(229, 231, 235), RGB(156, 163, 175), RGB(55, 65, 81), RGB(34, 211, 238), RGB(15, 23, 42), RGB(15, 108, 189), RGB(255, 255, 255), RGB(55, 65, 81), RGB(74, 222, 128), RGB(248, 113, 113), RGB(31, 41, 55), RGB(107, 114, 128), RGB(21, 31, 46)},
+    {RGB(255, 251, 245), RGB(255, 255, 255), RGB(255, 247, 237), RGB(38, 50, 56), RGB(99, 115, 124), RGB(232, 219, 204), RGB(232, 121, 46), RGB(255, 255, 255), RGB(253, 230, 209), RGB(38, 50, 56), RGB(241, 225, 207), RGB(46, 125, 50), RGB(211, 47, 47), RGB(247, 243, 238), RGB(158, 158, 158), RGB(255, 250, 244)},
+    {RGB(245, 250, 248), RGB(255, 255, 255), RGB(237, 247, 243), RGB(23, 53, 47), RGB(102, 122, 116), RGB(207, 226, 220), RGB(15, 157, 131), RGB(255, 255, 255), RGB(217, 243, 236), RGB(23, 53, 47), RGB(207, 226, 220), RGB(15, 157, 131), RGB(211, 47, 47), RGB(237, 244, 242), RGB(139, 157, 152), RGB(247, 252, 250)},
+    {RGB(250, 249, 255), RGB(255, 255, 255), RGB(246, 243, 255), RGB(41, 35, 63), RGB(113, 106, 132), RGB(221, 215, 238), RGB(113, 87, 217), RGB(255, 255, 255), RGB(233, 227, 255), RGB(41, 35, 63), RGB(225, 220, 242), RGB(46, 125, 50), RGB(211, 47, 47), RGB(245, 243, 250), RGB(156, 150, 172), RGB(252, 250, 255)},
+    {RGB(23, 23, 23), RGB(35, 35, 35), RGB(29, 29, 29), RGB(244, 241, 234), RGB(170, 166, 157), RGB(69, 66, 61), RGB(242, 169, 59), RGB(23, 23, 23), RGB(91, 66, 28), RGB(255, 248, 229), RGB(69, 66, 61), RGB(74, 222, 128), RGB(248, 113, 113), RGB(40, 40, 40), RGB(117, 115, 110), RGB(30, 30, 30)},
+}};
 
 struct Job { std::shared_ptr<std::atomic<bool>> cancel; std::thread worker; };
 struct Row {
@@ -67,6 +99,7 @@ struct State {
     HWND delete_files = nullptr;
     HWND cancel_all = nullptr;
     HWND clean_all = nullptr;
+    HWND theme_picker = nullptr;
     HWND title = nullptr;
     HWND subtitle = nullptr;
     HWND algorithm_group = nullptr;
@@ -77,6 +110,9 @@ struct State {
     HFONT title_font = nullptr;
     HFONT empty_hint_font = nullptr;
     HBRUSH background = nullptr;
+    HBRUSH surface_brush = nullptr;
+    HBRUSH drop_zone_brush = nullptr;
+    filehash::ui::ThemeId theme = filehash::ui::ThemeId::ArcticBlue;
     std::vector<Row> rows;
     std::uint64_t next_id = 1;
 };
@@ -99,6 +135,164 @@ std::wstring widen_lines(const std::string& value) {
     return result;
 }
 void set_text(HWND control, const std::wstring& text) { SetWindowTextW(control, text.c_str()); }
+
+const Palette& palette(const State& state) {
+    return kPalettes[filehash::ui::theme_index(state.theme)];
+}
+
+void replace_brush(HBRUSH& brush, const COLORREF color) {
+    if (brush != nullptr) DeleteObject(brush);
+    brush = CreateSolidBrush(color);
+}
+
+filehash::ui::ThemeId load_theme() {
+    DWORD value = 0;
+    DWORD size = sizeof(value);
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Lizy\\FileHashTool", L"Theme", RRF_RT_REG_DWORD,
+                     nullptr, &value, &size) != ERROR_SUCCESS) {
+        return filehash::ui::ThemeId::ArcticBlue;
+    }
+    return filehash::ui::theme_from_index(value);
+}
+
+void save_theme(const filehash::ui::ThemeId theme) {
+    const DWORD value = static_cast<DWORD>(filehash::ui::theme_index(theme));
+    RegSetKeyValueW(HKEY_CURRENT_USER, L"Software\\Lizy\\FileHashTool", L"Theme", REG_DWORD,
+                    &value, sizeof(value));
+}
+
+void update_title_bar(HWND window, const bool dark) {
+    using DwmSetWindowAttributeFn = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+    HMODULE module = LoadLibraryW(L"dwmapi.dll");
+    if (module == nullptr) return;
+    const auto set_attribute = reinterpret_cast<DwmSetWindowAttributeFn>(GetProcAddress(module, "DwmSetWindowAttribute"));
+    if (set_attribute != nullptr) {
+        const BOOL enabled = dark ? TRUE : FALSE;
+        // Attribute 20 is DWMWA_USE_IMMERSIVE_DARK_MODE on current Windows 10/11.
+        // Older systems safely ignore it; attribute 19 covers early Windows 10 builds.
+        if (FAILED(set_attribute(window, 20, &enabled, sizeof(enabled)))) {
+            set_attribute(window, 19, &enabled, sizeof(enabled));
+        }
+    }
+    FreeLibrary(module);
+}
+
+void apply_theme(State& state, const filehash::ui::ThemeId theme, const bool persist) {
+    state.theme = theme;
+    const auto& colors = palette(state);
+    replace_brush(state.background, colors.window_bg);
+    replace_brush(state.surface_brush, colors.surface);
+    replace_brush(state.drop_zone_brush, colors.drop_zone_bg);
+
+    if (state.list != nullptr) {
+        ListView_SetBkColor(state.list, colors.surface);
+        ListView_SetTextBkColor(state.list, colors.surface);
+        ListView_SetTextColor(state.list, colors.text_primary);
+    }
+    for (HWND progress : {state.file_progress, state.progress}) {
+        if (progress == nullptr) continue;
+        SendMessageW(progress, PBM_SETBARCOLOR, 0, colors.primary);
+        SendMessageW(progress, PBM_SETBKCOLOR, 0, colors.progress_track);
+    }
+    if (state.theme_picker != nullptr) {
+        const std::wstring name = widen(filehash::ui::theme_info(theme).name);
+        set_text(state.theme_picker, L"Theme: " + name + L"  ▾");
+    }
+    update_title_bar(state.window, filehash::ui::theme_info(theme).dark);
+    if (persist) save_theme(theme);
+    RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
+}
+
+void show_theme_menu(State& state) {
+    HMENU menu = CreatePopupMenu();
+    if (menu == nullptr) return;
+    const auto selected = filehash::ui::theme_index(state.theme);
+    for (std::size_t index = 0; index < filehash::ui::kThemes.size(); ++index) {
+        const auto label = widen(filehash::ui::kThemes[index].name);
+        AppendMenuW(menu, MF_STRING | (index == selected ? MF_CHECKED : 0),
+                    kThemeBase + static_cast<UINT>(index), label.c_str());
+    }
+    RECT button{};
+    GetWindowRect(state.theme_picker, &button);
+    const int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
+                                       button.left, button.bottom + 2, 0, state.window, nullptr);
+    DestroyMenu(menu);
+    if (command >= kThemeBase && command < kThemeBase + static_cast<int>(filehash::ui::kThemes.size())) {
+        apply_theme(state, filehash::ui::theme_from_index(static_cast<std::size_t>(command - kThemeBase)), true);
+    }
+}
+
+void draw_button(const State& state, const DRAWITEMSTRUCT& item) {
+    const auto& colors = palette(state);
+    const bool disabled = (item.itemState & ODS_DISABLED) != 0;
+    const bool pressed = (item.itemState & ODS_SELECTED) != 0;
+    const bool primary = item.hwndItem == state.add_files;
+    const bool danger = item.hwndItem == state.delete_files;
+    COLORREF fill = disabled ? colors.disabled_bg : (primary ? colors.primary : colors.surface);
+    COLORREF border = disabled ? colors.border : (danger ? colors.danger : (primary ? colors.primary : colors.border));
+    COLORREF text_color = disabled ? colors.disabled_text : (primary ? colors.primary_text : (danger ? colors.danger : colors.text_primary));
+    if (pressed && !disabled) fill = primary ? colors.selection : colors.surface_alt;
+
+    HBRUSH brush = CreateSolidBrush(fill);
+    HPEN pen = CreatePen(PS_SOLID, 1, border);
+    const HGDIOBJ previous_brush = SelectObject(item.hDC, brush);
+    const HGDIOBJ previous_pen = SelectObject(item.hDC, pen);
+    RoundRect(item.hDC, item.rcItem.left, item.rcItem.top, item.rcItem.right, item.rcItem.bottom, 7, 7);
+    SelectObject(item.hDC, previous_pen);
+    SelectObject(item.hDC, previous_brush);
+    DeleteObject(pen);
+    DeleteObject(brush);
+
+    wchar_t text[128]{};
+    GetWindowTextW(item.hwndItem, text, ARRAYSIZE(text));
+    SetBkMode(item.hDC, TRANSPARENT);
+    SetTextColor(item.hDC, text_color);
+    RECT text_rect = item.rcItem;
+    if (pressed) OffsetRect(&text_rect, 0, 1);
+    DrawTextW(item.hDC, text, -1, &text_rect, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    if ((item.itemState & ODS_FOCUS) != 0 && !disabled) {
+        RECT focus = item.rcItem;
+        InflateRect(&focus, -4, -4);
+        DrawFocusRect(item.hDC, &focus);
+    }
+}
+
+void draw_drop_zone(const State& state, const DRAWITEMSTRUCT& item) {
+    const auto& colors = palette(state);
+    FillRect(item.hDC, &item.rcItem, state.drop_zone_brush);
+    HPEN pen = CreatePen(PS_DOT, 1, colors.primary);
+    const HGDIOBJ old_pen = SelectObject(item.hDC, pen);
+    const HGDIOBJ old_brush = SelectObject(item.hDC, GetStockObject(NULL_BRUSH));
+    Rectangle(item.hDC, item.rcItem.left, item.rcItem.top, item.rcItem.right - 1, item.rcItem.bottom - 1);
+    SelectObject(item.hDC, old_brush);
+    SelectObject(item.hDC, old_pen);
+    DeleteObject(pen);
+
+    RECT icon{item.rcItem.left + 22, item.rcItem.top + 20, item.rcItem.left + 48, item.rcItem.bottom - 20};
+    HPEN icon_pen = CreatePen(PS_SOLID, 2, colors.primary);
+    const HGDIOBJ previous = SelectObject(item.hDC, icon_pen);
+    MoveToEx(item.hDC, icon.left, icon.top, nullptr);
+    LineTo(item.hDC, icon.right - 7, icon.top);
+    LineTo(item.hDC, icon.right, icon.top + 7);
+    LineTo(item.hDC, icon.right, icon.bottom);
+    LineTo(item.hDC, icon.left, icon.bottom);
+    LineTo(item.hDC, icon.left, icon.top);
+    MoveToEx(item.hDC, icon.right - 7, icon.top, nullptr);
+    LineTo(item.hDC, icon.right - 7, icon.top + 7);
+    LineTo(item.hDC, icon.right, icon.top + 7);
+    SelectObject(item.hDC, previous);
+    DeleteObject(icon_pen);
+
+    wchar_t text[256]{};
+    GetWindowTextW(item.hwndItem, text, ARRAYSIZE(text));
+    RECT text_rect = item.rcItem;
+    text_rect.left += 64;
+    text_rect.right -= 18;
+    SetBkMode(item.hDC, TRANSPARENT);
+    SetTextColor(item.hDC, colors.text_secondary);
+    DrawTextW(item.hDC, text, -1, &text_rect, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+}
 
 std::vector<filehash::HashAlgorithm> selected_algorithms(const State& state) {
     std::vector<filehash::HashAlgorithm> result;
@@ -433,22 +627,24 @@ void layout(State& state, const int width, const int height) {
     const int content_width = std::max(100, width - 32);
     MoveWindow(state.title, 16, 14, 500, 32, TRUE);
     MoveWindow(state.subtitle, 16, 47, 620, 22, TRUE);
-    MoveWindow(state.add_files, width - 530, 18, 94, 30, TRUE);
-    MoveWindow(state.copy_results, width - 428, 18, 108, 30, TRUE);
-    MoveWindow(state.delete_files, width - 310, 18, 92, 30, TRUE);
-    MoveWindow(state.clean_all, width - 210, 18, 92, 30, TRUE);
-    MoveWindow(state.cancel_all, width - 108, 18, 92, 30, TRUE);
-    MoveWindow(state.algorithm_group, 16, 76, content_width, 48, TRUE);
-    for (int index = 0; index < 6; ++index) MoveWindow(state.checks[index], 32 + index * 95, 94, 88, 20, TRUE);
-    MoveWindow(state.drop_hint, 16, 132, content_width, 22, TRUE);
-    MoveWindow(state.file_progress_label, 16, 157, 110, 18, TRUE);
-    MoveWindow(state.file_progress, 132, 159, std::max(50, content_width - 116), 12, TRUE);
-    MoveWindow(state.progress_label, 16, 180, 110, 18, TRUE);
-    MoveWindow(state.progress, 132, 182, std::max(50, content_width - 116), 12, TRUE);
-    const int list_height = std::max(80, height - 260);
-    MoveWindow(state.list, 16, 206, content_width, list_height, TRUE);
-    MoveWindow(state.empty_hint, 16, 206 + std::max(0, (list_height - 34) / 2), content_width, 34, TRUE);
-    MoveWindow(state.status, 16, height - 42, content_width, 22, TRUE);
+    MoveWindow(state.add_files, width - 678, 18, 94, 32, TRUE);
+    MoveWindow(state.copy_results, width - 574, 18, 108, 32, TRUE);
+    MoveWindow(state.delete_files, width - 456, 18, 92, 32, TRUE);
+    MoveWindow(state.clean_all, width - 354, 18, 92, 32, TRUE);
+    MoveWindow(state.cancel_all, width - 252, 18, 92, 32, TRUE);
+    MoveWindow(state.theme_picker, width - 150, 18, 134, 32, TRUE);
+    MoveWindow(state.algorithm_group, 16, 78, content_width, 56, TRUE);
+    for (int index = 0; index < 6; ++index) MoveWindow(state.checks[index], 32 + index * 98, 100, 91, 20, TRUE);
+    MoveWindow(state.drop_hint, 16, 144, content_width, 78, TRUE);
+    MoveWindow(state.file_progress_label, 16, 234, 110, 18, TRUE);
+    MoveWindow(state.file_progress, 132, 237, std::max(50, content_width - 116), 10, TRUE);
+    MoveWindow(state.progress_label, 16, 258, 110, 18, TRUE);
+    MoveWindow(state.progress, 132, 261, std::max(50, content_width - 116), 10, TRUE);
+    const int list_top = 286;
+    const int list_height = std::max(80, height - 332);
+    MoveWindow(state.list, 16, list_top, content_width, list_height, TRUE);
+    MoveWindow(state.empty_hint, 16, list_top + std::max(0, (list_height - 34) / 2), content_width, 34, TRUE);
+    MoveWindow(state.status, 16, height - 34, content_width, 20, TRUE);
     ListView_SetColumnWidth(state.list, 0, std::max(220, content_width * 32 / 100));
     ListView_SetColumnWidth(state.list, 1, 105);
     ListView_SetColumnWidth(state.list, 2, std::max(240, content_width * 68 / 100 - 105));
@@ -465,41 +661,39 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     if (state == nullptr) return DefWindowProcW(window, message, wparam, lparam);
     switch (message) {
         case WM_CREATE: {
+            state->theme = load_theme();
             state->font = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                       OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                       DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
             state->title_font = CreateFontW(-24, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                             DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-            state->background = CreateSolidBrush(RGB(232, 240, 250));
+            state->background = CreateSolidBrush(palette(*state).window_bg);
+            state->surface_brush = CreateSolidBrush(palette(*state).surface);
+            state->drop_zone_brush = CreateSolidBrush(palette(*state).drop_zone_bg);
             state->title = CreateWindowW(L"STATIC", L"Lizy File Hash Tool v1.0", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kTitle), nullptr, nullptr);
             state->subtitle = CreateWindowW(L"STATIC", L"Fast, local and privacy-first file verification", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kSubtitle), nullptr, nullptr);
-            state->add_files = CreateWindowW(L"BUTTON", L"Add files", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kAddFiles), nullptr, nullptr);
-            state->copy_results = CreateWindowW(L"BUTTON", L"Copy results", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCopyResults), nullptr, nullptr);
-            state->delete_files = CreateWindowW(L"BUTTON", L"Delete", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kDeleteFiles), nullptr, nullptr);
-            state->cancel_all = CreateWindowW(L"BUTTON", L"Cancel all", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCancelAll), nullptr, nullptr);
-            state->clean_all = CreateWindowW(L"BUTTON", L"Clean all", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCleanAll), nullptr, nullptr);
+            state->add_files = CreateWindowW(L"BUTTON", L"Add files", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kAddFiles), nullptr, nullptr);
+            state->copy_results = CreateWindowW(L"BUTTON", L"Copy results", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCopyResults), nullptr, nullptr);
+            state->delete_files = CreateWindowW(L"BUTTON", L"Delete", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kDeleteFiles), nullptr, nullptr);
+            state->cancel_all = CreateWindowW(L"BUTTON", L"Cancel all", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCancelAll), nullptr, nullptr);
+            state->clean_all = CreateWindowW(L"BUTTON", L"Clean all", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCleanAll), nullptr, nullptr);
+            state->theme_picker = CreateWindowW(L"BUTTON", L"Theme", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kThemePicker), nullptr, nullptr);
             state->algorithm_group = CreateWindowW(L"BUTTON", L"Algorithms", WS_CHILD | WS_VISIBLE | BS_GROUPBOX, 0, 0, 0, 0, window, nullptr, nullptr, nullptr);
             for (int index = 0; index < 6; ++index) {
                 state->checks[index] = CreateWindowW(L"BUTTON", widen(filehash::algorithm_name(kAlgorithms[index])).c_str(), WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kAlgorithmBase + index), nullptr, nullptr);
             }
             SendMessageW(state->checks[1], BM_SETCHECK, BST_CHECKED, 0);
             SendMessageW(state->checks[3], BM_SETCHECK, BST_CHECKED, 0);
-            state->drop_hint = CreateWindowW(L"STATIC", L"Drop files anywhere in this window — each file starts independently", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window, nullptr, nullptr, nullptr);
+            state->drop_hint = CreateWindowW(L"STATIC", L"Drop files anywhere in this window — each file starts independently", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 0, 0, 0, 0, window, nullptr, nullptr, nullptr);
             state->file_progress_label = CreateWindowW(L"STATIC", L"File progress  0%", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window, nullptr, nullptr, nullptr);
             state->file_progress = CreateWindowExW(0, PROGRESS_CLASSW, L"", WS_CHILD | WS_VISIBLE | PBS_SMOOTH, 0, 0, 0, 0, window, nullptr, nullptr, nullptr);
             SendMessageW(state->file_progress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
-            SendMessageW(state->file_progress, PBM_SETBARCOLOR, 0, RGB(37, 99, 235));
-            SendMessageW(state->file_progress, PBM_SETBKCOLOR, 0, RGB(207, 222, 242));
             state->progress_label = CreateWindowW(L"STATIC", L"All files  0%", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window, nullptr, nullptr, nullptr);
             state->progress = CreateWindowExW(0, PROGRESS_CLASSW, L"", WS_CHILD | WS_VISIBLE | PBS_SMOOTH, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kProgress), nullptr, nullptr);
             SendMessageW(state->progress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
-            SendMessageW(state->progress, PBM_SETBARCOLOR, 0, RGB(37, 99, 235));
-            SendMessageW(state->progress, PBM_SETBKCOLOR, 0, RGB(207, 222, 242));
             state->list = CreateWindowW(WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kList), nullptr, nullptr);
             ListView_SetExtendedListViewStyle(state->list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-            ListView_SetBkColor(state->list, RGB(239, 246, 255));
-            ListView_SetTextBkColor(state->list, RGB(239, 246, 255));
             const wchar_t* columns[] = {L"File", L"Status", L"Hash values"};
             const int widths[] = {420, 105, 700};
             for (int index = 0; index < 3; ++index) {
@@ -514,11 +708,12 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
             state->status = CreateWindowW(L"STATIC", L"Ready — add files or drag them here", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kStatus), nullptr, nullptr);
-            for (HWND control : {state->title, state->subtitle, state->add_files, state->copy_results, state->delete_files, state->cancel_all, state->clean_all, state->algorithm_group, state->drop_hint, state->file_progress_label, state->file_progress, state->progress_label, state->progress, state->list, state->status}) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
+            for (HWND control : {state->title, state->subtitle, state->add_files, state->copy_results, state->delete_files, state->cancel_all, state->clean_all, state->theme_picker, state->algorithm_group, state->drop_hint, state->file_progress_label, state->file_progress, state->progress_label, state->progress, state->list, state->status}) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
             SendMessageW(state->empty_hint, WM_SETFONT, reinterpret_cast<WPARAM>(state->empty_hint_font), TRUE);
             SendMessageW(state->title, WM_SETFONT, reinterpret_cast<WPARAM>(state->title_font), TRUE);
             for (HWND check : state->checks) SendMessageW(check, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
             DragAcceptFiles(window, TRUE);
+            apply_theme(*state, state->theme, false);
             return 0;
         }
         case WM_SIZE: layout(*state, LOWORD(lparam), HIWORD(lparam)); return 0;
@@ -529,6 +724,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 case kDeleteFiles: delete_selected(*state); return 0;
                 case kCancelAll: cancel_all(*state); return 0;
                 case kCleanAll: clean_all(*state); return 0;
+                case kThemePicker: show_theme_menu(*state); return 0;
                 default:
                     if (LOWORD(wparam) >= kAlgorithmBase && LOWORD(wparam) < kAlgorithmBase + 6 && HIWORD(wparam) == BN_CLICKED) {
                         for (const auto& row : state->rows) if (!row.job) start_file(*state, row.id);
@@ -539,6 +735,21 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                     break;
             }
             break;
+        case WM_DRAWITEM: {
+            const auto* item = reinterpret_cast<DRAWITEMSTRUCT*>(lparam);
+            if (item == nullptr) break;
+            if (item->hwndItem == state->drop_hint) {
+                draw_drop_zone(*state, *item);
+                return TRUE;
+            }
+            if (item->hwndItem == state->add_files || item->hwndItem == state->copy_results ||
+                item->hwndItem == state->delete_files || item->hwndItem == state->cancel_all ||
+                item->hwndItem == state->clean_all || item->hwndItem == state->theme_picker) {
+                draw_button(*state, *item);
+                return TRUE;
+            }
+            break;
+        }
         case WM_DROPFILES: {
             const HDROP drop = reinterpret_cast<HDROP>(wparam);
             const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
@@ -567,9 +778,27 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 auto* draw = reinterpret_cast<NMLVCUSTOMDRAW*>(lparam);
                 if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
                 if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-                    draw->clrText = RGB(24, 47, 79);
-                    draw->clrTextBk = draw->nmcd.dwItemSpec % 2 == 0 ? RGB(245, 249, 255) : RGB(229, 239, 252);
-                    return CDRF_NOTIFYPOSTPAINT;
+                    const auto& colors = palette(*state);
+                    const bool selected = (draw->nmcd.uItemState & CDIS_SELECTED) != 0;
+                    draw->clrText = selected ? colors.selection_text : colors.text_primary;
+                    draw->clrTextBk = selected ? colors.selection :
+                        (draw->nmcd.dwItemSpec % 2 == 0 ? colors.surface : colors.surface_alt);
+                    return CDRF_NOTIFYSUBITEMDRAW | CDRF_NOTIFYPOSTPAINT;
+                }
+                if (draw->nmcd.dwDrawStage == (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) {
+                    const auto& colors = palette(*state);
+                    const bool selected = (draw->nmcd.uItemState & CDIS_SELECTED) != 0;
+                    draw->clrText = selected ? colors.selection_text : colors.text_primary;
+                    draw->clrTextBk = selected ? colors.selection :
+                        (draw->nmcd.dwItemSpec % 2 == 0 ? colors.surface : colors.surface_alt);
+                    if (!selected && draw->iSubItem == 1) {
+                        wchar_t status[32]{};
+                        ListView_GetItemText(state->list, static_cast<int>(draw->nmcd.dwItemSpec), 1,
+                                             status, ARRAYSIZE(status));
+                        if (wcscmp(status, L"Done") == 0) draw->clrText = colors.success;
+                        else if (wcscmp(status, L"Error") == 0) draw->clrText = colors.danger;
+                    }
+                    return CDRF_DODEFAULT;
                 }
                 if (draw->nmcd.dwDrawStage == CDDS_ITEMPOSTPAINT) {
                     RECT item_rect{};
@@ -578,7 +807,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                     GetClientRect(state->list, &line_rect);
                     line_rect.top = item_rect.bottom - 1;
                     line_rect.bottom = item_rect.bottom;
-                    HBRUSH line_brush = CreateSolidBrush(RGB(0, 0, 0));
+                    HBRUSH line_brush = CreateSolidBrush(palette(*state).border);
                     FillRect(draw->nmcd.hdc, &line_rect, line_brush);
                     const HWND header = ListView_GetHeader(state->list);
                     if (header != nullptr) {
@@ -602,12 +831,31 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             finish_file(*state, static_cast<std::uint64_t>(wparam));
             update_overall_progress(*state);
             return 0;
-        case WM_CTLCOLORSTATIC: {
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLORBTN: {
             const HDC dc = reinterpret_cast<HDC>(wparam);
             const HWND control = reinterpret_cast<HWND>(lparam);
             SetBkMode(dc, TRANSPARENT);
-            SetTextColor(dc, control == state->title ? RGB(17, 45, 87) : (control == state->empty_hint ? RGB(37, 99, 235) : RGB(47, 72, 106)));
+            const auto& colors = palette(*state);
+            SetTextColor(dc, control == state->title ? colors.text_primary :
+                              (control == state->empty_hint ? colors.primary : colors.text_secondary));
+            if (control == state->algorithm_group) {
+                SetTextColor(dc, colors.text_primary);
+                return reinterpret_cast<LRESULT>(state->surface_brush);
+            }
+            for (HWND check : state->checks) {
+                if (control == check) {
+                    SetTextColor(dc, colors.text_primary);
+                    return reinterpret_cast<LRESULT>(state->surface_brush);
+                }
+            }
             return reinterpret_cast<LRESULT>(state->background);
+        }
+        case WM_GETMINMAXINFO: {
+            auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
+            info->ptMinTrackSize.x = 960;
+            info->ptMinTrackSize.y = 560;
+            return 0;
         }
         case WM_ERASEBKGND: { RECT rect; GetClientRect(window, &rect); FillRect(reinterpret_cast<HDC>(wparam), &rect, state->background); return 1; }
         case WM_DESTROY:
@@ -616,6 +864,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             if (state->title_font) DeleteObject(state->title_font);
             if (state->empty_hint_font) DeleteObject(state->empty_hint_font);
             if (state->background) DeleteObject(state->background);
+            if (state->surface_brush) DeleteObject(state->surface_brush);
+            if (state->drop_zone_brush) DeleteObject(state->drop_zone_brush);
             PostQuitMessage(0);
             return 0;
         default: break;

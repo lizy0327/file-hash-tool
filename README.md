@@ -18,6 +18,19 @@ A lightweight and fast cross-platform file verification tool. The shared core is
 - Copied results include the absolute path and file name, size, modified time, status, and each algorithm result, with one attribute per line.
 - 无文件时显示“文件拖拽到此处”提示，并使用蓝色钥匙主题图标。
 - An empty list displays “文件拖拽到此处” and the application uses a blue key-themed icon.
+- Windows 与 Linux GUI 提供醒目的文件拖放卡片和六套可即时切换的主题，主题选择会在下次启动时自动恢复。
+- The Windows and Linux GUIs provide a prominent file drop-zone card and six instantly switchable themes; the selected theme is restored on the next launch.
+
+## 界面主题 / UI themes
+
+GUI 内置 Arctic Blue、Midnight Cyan、Warm Orange、Jade Mist、Violet Cloud 和 Graphite Amber 六套主题。所有主题共用相同的布局与交互，仅替换语义化颜色，兼顾浅色、深色和高对比使用场景。
+
+The GUI includes Arctic Blue, Midnight Cyan, Warm Orange, Jade Mist, Violet Cloud, and Graphite Amber. Every theme shares the same layout and interaction model while replacing semantic colors for light, dark, and high-contrast use cases.
+
+- Windows：点击窗口右上角的 `Theme` 按钮选择主题；设置保存在当前用户注册表中。
+- Linux：使用窗口右上角的主题下拉框；设置保存在用户配置目录中。
+- Windows: choose a theme from the `Theme` button in the upper-right corner; the choice is stored in the current user's registry.
+- Linux: use the theme drop-down in the upper-right corner; the choice is stored in the user's configuration directory.
 
 ## 支持平台 / Supported platforms
 

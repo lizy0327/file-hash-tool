@@ -1,3 +1,4 @@
+#include "app/theme.h"
 #include "core/crc32.h"
 #include "core/hash_engine.h"
 
@@ -9,6 +10,11 @@
 
 int main() {
     using namespace filehash;
+
+    static_assert(ui::kThemes.size() == 6);
+    static_assert(ui::theme_from_index(99) == ui::ThemeId::ArcticBlue);
+    assert(std::string(ui::theme_info(ui::ThemeId::GraphiteAmber).slug) == "graphite-amber");
+    assert(ui::theme_info(ui::ThemeId::MidnightCyan).dark);
 
     Crc32 crc;
     const std::string vector = "123456789";
