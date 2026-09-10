@@ -25,7 +25,8 @@ jobs:
 
   windows:
     name: Windows x86 构建与测试 / Windows x86 build and test
-    runs-on: windows-latest
+    # 中文：固定到包含 VS2022 的镜像，避免 latest 镜像变更导致生成器不匹配 / English: Pin the image that includes VS2022 to avoid generator drift on latest images
+    runs-on: windows-2022
     steps:
       - name: 检出代码 / Check out source
         uses: actions/checkout@v4
