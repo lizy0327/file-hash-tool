@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 中文：比较模式下点击行内任意位置即可切换该文件的复选框，并选中该行；English: In compare mode, clicking anywhere in a row toggles its checkbox and selects the row.
+
 ### 中文
 
 - Windows 和 Linux GUI 新增 Arctic Blue、Midnight Cyan、Warm Orange、Jade Mist、Violet Cloud 与 Graphite Amber 六套主题。

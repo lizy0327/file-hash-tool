@@ -574,9 +574,20 @@ gboolean on_button_press(GtkWidget* widget, GdkEventButton* event, gpointer data
     gint* indices = gtk_tree_path_get_indices(path);
     const int index = indices ? indices[0] : -1;
     if (event->button == 1) {
-        if (!state.compare_mode) copy_row(state, index);
+        if (state.compare_mode) {
+            GtkTreeIter iter;
+            if (gtk_tree_model_get_iter(GTK_TREE_MODEL(state.store), &iter, path)) {
+                gboolean checked = FALSE;
+                gtk_tree_model_get(GTK_TREE_MODEL(state.store), &iter, kChecked, &checked, -1);
+                gtk_list_store_set(state.store, &iter, kChecked, checked ? FALSE : TRUE, -1);
+                gtk_tree_selection_unselect_all(state.selection);
+                gtk_tree_selection_select_path(state.selection, path);
+            }
+        } else {
+            copy_row(state, index);
+        }
         gtk_tree_path_free(path);
-        return FALSE;
+        return state.compare_mode ? TRUE : FALSE;
     }
     if (event->button != 3) {
         gtk_tree_path_free(path);

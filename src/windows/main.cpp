@@ -1011,7 +1011,19 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             }
             if (reinterpret_cast<NMHDR*>(lparam)->hwndFrom == state->list && reinterpret_cast<NMHDR*>(lparam)->code == NM_CLICK) {
                 const auto* click = reinterpret_cast<NMLISTVIEW*>(lparam);
-                copy_row(*state, click->iItem);
+                if (state->compare_mode) {
+                    LVHITTESTINFO hit{};
+                    hit.pt = click->ptAction;
+                    ListView_SubItemHitTest(state->list, &hit);
+                    if ((hit.flags & LVHT_ONITEMSTATEICON) == 0) {
+                        ListView_SetCheckState(state->list, click->iItem,
+                                               !ListView_GetCheckState(state->list, click->iItem));
+                    }
+                    ListView_SetItemState(state->list, -1, 0, LVIS_SELECTED);
+                    ListView_SetItemState(state->list, click->iItem, LVIS_SELECTED, LVIS_SELECTED);
+                } else {
+                    copy_row(*state, click->iItem);
+                }
                 return 0;
             }
             if (reinterpret_cast<NMHDR*>(lparam)->hwndFrom == state->list && reinterpret_cast<NMHDR*>(lparam)->code == NM_CUSTOMDRAW) {
