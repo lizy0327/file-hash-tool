@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- 中文：语言切换改为主界面独立按钮，中文界面显示 `English`，英文界面显示 `中文`；English: Language switching is now a standalone main-window button, showing `English` in Chinese mode and `中文` in English mode.
 - 中文：比较模式下点击行内任意位置即可切换该文件的复选框，并选中该行；English: In compare mode, clicking anywhere in a row toggles its checkbox and selects the row.
 
 ### 中文

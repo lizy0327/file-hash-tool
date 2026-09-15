@@ -29,7 +29,7 @@ constexpr int kCleanAll = 1005;
 constexpr int kThemePicker = 1006;
 constexpr int kCompare = 1007;
 constexpr int kConfirmCompare = 1008;
-constexpr int kLanguageBase = 1400;
+constexpr int kLanguageSwitch = 1009;
 constexpr int kContextCopy = 2001;
 constexpr int kContextDelete = 2002;
 constexpr int kContextSelectAll = 2003;
@@ -107,6 +107,7 @@ struct State {
     HWND theme_picker = nullptr;
     HWND compare_button = nullptr;
     HWND confirm_compare = nullptr;
+    HWND language_button = nullptr;
     HWND title = nullptr;
     HWND subtitle = nullptr;
     HWND algorithm_group = nullptr;
@@ -262,11 +263,6 @@ void show_theme_menu(State& state) {
         AppendMenuW(menu, MF_STRING | (index == selected ? MF_CHECKED : 0),
                     kThemeBase + static_cast<UINT>(index), label.c_str());
     }
-    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING | (state.language == filehash::ui::Language::Chinese ? MF_CHECKED : 0),
-                kLanguageBase, L"中文");
-    AppendMenuW(menu, MF_STRING | (state.language == filehash::ui::Language::English ? MF_CHECKED : 0),
-                kLanguageBase + 1, L"English");
     RECT button{};
     GetWindowRect(state.theme_picker, &button);
     const int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
@@ -463,6 +459,7 @@ void apply_language(State& state, const filehash::ui::Language language, const b
     set_text(state.cancel_all, tr(state, L"取消全部", L"Cancel all"));
     set_text(state.compare_button, state.compare_mode ? tr(state, L"取消比较", L"Cancel") : tr(state, L"比较", L"Compare"));
     set_text(state.confirm_compare, tr(state, L"确认", L"Confirm"));
+    set_text(state.language_button, state.language == filehash::ui::Language::Chinese ? L"English" : L"中文");
     set_text(state.algorithm_group, tr(state, L"算法", L"Algorithms"));
     set_text(state.drop_hint, tr(state, L"将文件拖到窗口任意位置——每个文件独立开始计算",
                                 L"Drop files anywhere in this window — each file starts independently"));
@@ -831,13 +828,14 @@ void layout(State& state, const int width, const int height) {
     const int content_width = std::max(100, width - 32);
     MoveWindow(state.title, 16, 14, 380, 32, TRUE);
     MoveWindow(state.subtitle, 16, 47, 620, 22, TRUE);
-    MoveWindow(state.add_files, width - 822, 18, 82, 32, TRUE);
-    MoveWindow(state.copy_results, width - 730, 18, 94, 32, TRUE);
-    MoveWindow(state.delete_files, width - 626, 18, 76, 32, TRUE);
-    MoveWindow(state.clean_all, width - 540, 18, 76, 32, TRUE);
-    MoveWindow(state.cancel_all, width - 444, 18, 86, 32, TRUE);
-    MoveWindow(state.compare_button, width - 346, 18, 88, 32, TRUE);
-    MoveWindow(state.confirm_compare, width - 248, 18, 88, 32, TRUE);
+    MoveWindow(state.add_files, width - 886, 18, 82, 32, TRUE);
+    MoveWindow(state.copy_results, width - 796, 18, 94, 32, TRUE);
+    MoveWindow(state.delete_files, width - 694, 18, 76, 32, TRUE);
+    MoveWindow(state.clean_all, width - 610, 18, 76, 32, TRUE);
+    MoveWindow(state.cancel_all, width - 526, 18, 86, 32, TRUE);
+    MoveWindow(state.compare_button, width - 432, 18, 88, 32, TRUE);
+    MoveWindow(state.confirm_compare, width - 336, 18, 88, 32, TRUE);
+    MoveWindow(state.language_button, width - 240, 18, 82, 32, TRUE);
     MoveWindow(state.theme_picker, width - 150, 18, 134, 32, TRUE);
     MoveWindow(state.algorithm_group, 16, 78, content_width, 56, TRUE);
     for (int index = 0; index < 6; ++index) MoveWindow(state.checks[index], 32 + index * 98, 100, 91, 20, TRUE);
@@ -928,6 +926,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             state->clean_all = CreateWindowW(L"BUTTON", L"Clean all", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCleanAll), nullptr, nullptr);
             state->compare_button = CreateWindowW(L"BUTTON", L"Compare", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCompare), nullptr, nullptr);
             state->confirm_compare = CreateWindowW(L"BUTTON", L"Confirm", WS_CHILD | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kConfirmCompare), nullptr, nullptr);
+            state->language_button = CreateWindowW(L"BUTTON", L"English", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kLanguageSwitch), nullptr, nullptr);
             state->theme_picker = CreateWindowW(L"BUTTON", L"Theme", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kThemePicker), nullptr, nullptr);
             state->algorithm_group = CreateWindowW(L"STATIC", L"Algorithms", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 0, 0, 0, 0, window, nullptr, nullptr, nullptr);
             for (int index = 0; index < 6; ++index) {
@@ -959,7 +958,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
             state->status = CreateWindowW(L"STATIC", L"Ready — add files or drag them here", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kStatus), nullptr, nullptr);
-            for (HWND control : {state->title, state->subtitle, state->add_files, state->copy_results, state->delete_files, state->cancel_all, state->clean_all, state->compare_button, state->confirm_compare, state->theme_picker, state->algorithm_group, state->drop_hint, state->file_progress_label, state->file_progress, state->progress_label, state->progress, state->list, state->status}) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
+            for (HWND control : {state->title, state->subtitle, state->add_files, state->copy_results, state->delete_files, state->cancel_all, state->clean_all, state->compare_button, state->confirm_compare, state->language_button, state->theme_picker, state->algorithm_group, state->drop_hint, state->file_progress_label, state->file_progress, state->progress_label, state->progress, state->list, state->status}) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
             SendMessageW(state->empty_hint, WM_SETFONT, reinterpret_cast<WPARAM>(state->empty_hint_font), TRUE);
             SendMessageW(state->title, WM_SETFONT, reinterpret_cast<WPARAM>(state->title_font), TRUE);
             for (HWND check : state->checks) SendMessageW(check, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
@@ -988,8 +987,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                     return 0;
                 case kConfirmCompare: compare_files(*state); return 0;
                 case kThemePicker: show_theme_menu(*state); return 0;
-                case kLanguageBase: apply_language(*state, filehash::ui::Language::Chinese, true); return 0;
-                case kLanguageBase + 1: apply_language(*state, filehash::ui::Language::English, true); return 0;
+                case kLanguageSwitch:
+                    apply_language(*state, state->language == filehash::ui::Language::Chinese ? filehash::ui::Language::English : filehash::ui::Language::Chinese, true);
+                    return 0;
                 default:
                     if (LOWORD(wparam) >= kAlgorithmBase && LOWORD(wparam) < kAlgorithmBase + 6 && HIWORD(wparam) == BN_CLICKED) {
                         const int index = LOWORD(wparam) - kAlgorithmBase;
@@ -1024,6 +1024,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 item->hwndItem == state->delete_files || item->hwndItem == state->cancel_all ||
                 item->hwndItem == state->clean_all || item->hwndItem == state->compare_button ||
                 item->hwndItem == state->confirm_compare ||
+                item->hwndItem == state->language_button ||
                 item->hwndItem == state->theme_picker) {
                 draw_button(*state, *item);
                 return TRUE;

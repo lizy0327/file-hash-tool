@@ -77,7 +77,7 @@ struct State {
     GtkWidget* clean_button = nullptr;
     GtkWidget* compare_button = nullptr;
     GtkWidget* confirm_button = nullptr;
-    GtkWidget* language_combo = nullptr;
+    GtkWidget* language_button = nullptr;
     GtkWidget* title = nullptr;
     GtkWidget* subtitle = nullptr;
     GtkWidget* add_button = nullptr;
@@ -773,6 +773,7 @@ void apply_language(State& state, const filehash::ui::Language language, const b
     gtk_button_set_label(GTK_BUTTON(state.cancel_button), tr(state, "取消全部", "Cancel all"));
     gtk_button_set_label(GTK_BUTTON(state.compare_button), state.compare_mode ? tr(state, "取消比较", "Cancel") : tr(state, "比较", "Compare"));
     gtk_button_set_label(GTK_BUTTON(state.confirm_button), tr(state, "确认", "Confirm"));
+    gtk_button_set_label(GTK_BUTTON(state.language_button), state.language == filehash::ui::Language::Chinese ? "English" : "中文");
     gtk_frame_set_label(GTK_FRAME(state.algorithm_frame), tr(state, "算法", "Algorithms"));
     gtk_label_set_text(GTK_LABEL(state.drop_hint), tr(state, "将文件拖到窗口任意位置——每个文件独立开始计算",
                                                        "Drop files anywhere in this window — each file starts independently"));
@@ -789,10 +790,9 @@ void apply_language(State& state, const filehash::ui::Language language, const b
     apply_theme(state, state.theme, false);
 }
 
-void language_changed(GtkComboBox* combo, gpointer data) {
+void language_button_clicked(GtkButton*, gpointer data) {
     State& state = *static_cast<State*>(data);
-    const int index = gtk_combo_box_get_active(combo);
-    if (index >= 0) apply_language(state, filehash::ui::language_from_index(static_cast<std::size_t>(index)), true);
+    apply_language(state, state.language == filehash::ui::Language::Chinese ? filehash::ui::Language::English : filehash::ui::Language::Chinese, true);
 }
 
 }  // 命名空间 / Namespace
@@ -851,11 +851,8 @@ int main(int argc, char** argv) {
     gtk_box_pack_start(GTK_BOX(actions), state.cancel_button, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(actions), state.compare_button, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(actions), state.confirm_button, FALSE, FALSE, 0);
-    state.language_combo = gtk_combo_box_text_new();
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(state.language_combo), "中文");
-    gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(state.language_combo), "English");
-    gtk_combo_box_set_active(GTK_COMBO_BOX(state.language_combo), static_cast<int>(filehash::ui::language_index(state.language)));
-    gtk_box_pack_start(GTK_BOX(actions), state.language_combo, FALSE, FALSE, 0);
+    state.language_button = gtk_button_new_with_label("English");
+    gtk_box_pack_start(GTK_BOX(actions), state.language_button, FALSE, FALSE, 0);
     state.theme_combo = gtk_combo_box_text_new();
     for (const auto& theme : filehash::ui::kThemes) {
         gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(state.theme_combo), theme.name);
@@ -869,7 +866,7 @@ int main(int argc, char** argv) {
     g_signal_connect(state.clean_button, "clicked", G_CALLBACK(clean_all), &state);
     g_signal_connect(state.compare_button, "clicked", G_CALLBACK(compare_button_clicked), &state);
     g_signal_connect(state.confirm_button, "clicked", G_CALLBACK(compare_files), &state);
-    g_signal_connect(state.language_combo, "changed", G_CALLBACK(language_changed), &state);
+    g_signal_connect(state.language_button, "clicked", G_CALLBACK(language_button_clicked), &state);
     g_signal_connect(state.theme_combo, "changed", G_CALLBACK(theme_changed), &state);
 
     state.algorithm_frame = gtk_frame_new("Algorithms");

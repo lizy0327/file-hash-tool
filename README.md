@@ -16,8 +16,8 @@ A lightweight and fast cross-platform file verification tool. The shared core is
 - Supports the Delete key, a context menu, Clean all, copying one result, and copying all results.
 - 点击 Compare 后可勾选两条记录，点击 Confirm 自动比较已计算的 MD5、SHA 和其他校验结果。
 - Click Compare to select two records, then click Confirm to compare their calculated MD5, SHA, and other hash values.
-- 默认使用中文界面，可通过语言选项切换到 English；确认比较后会弹窗显示一致或不一致，也可取消比较。
-- Chinese is the default UI language; the language option switches to English. Confirmation shows a comparison dialog, and an active comparison can be cancelled.
+- 默认使用中文界面，点击主界面的 `English` 按钮可切换到英文；切换后按钮显示 `中文`。确认比较后会弹窗显示一致或不一致，也可取消比较。
+- Chinese is the default UI language. Click the `English` button on the main window to switch to English; the button then becomes `中文`. Confirmation shows a comparison dialog, and an active comparison can be cancelled.
 - 复制结果包含每个文件的绝对路径、文件名、文件大小、修改时间、状态及各算法结果，每个属性独立一行。
 - Copied results include the absolute path and file name, size, modified time, status, and each algorithm result, with one attribute per line.
 - 无文件时显示“文件拖拽到此处”提示，并使用蓝色钥匙主题图标。
