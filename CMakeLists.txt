@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16)
 
-project(FileHashTool VERSION 1.0.0 LANGUAGES CXX)
+project(FileHashTool VERSION 1.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -59,7 +59,7 @@ endif()
 if(FILEHASHTOOL_BUILD_GUI)
     if(WIN32)
         add_executable(filehash_tool WIN32 src/windows/main.cpp src/windows/resource.rc)
-        target_link_libraries(filehash_tool PRIVATE filehash_core comctl32 comdlg32 shell32)
+        target_link_libraries(filehash_tool PRIVATE filehash_core comctl32 comdlg32 shell32 advapi32)
         target_compile_definitions(filehash_tool PRIVATE NOMINMAX UNICODE _UNICODE _WIN32_WINNT=0x0601)
         if(MSVC)
             target_compile_options(filehash_tool PRIVATE /W4 /EHsc /utf-8 /permissive-)

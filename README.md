@@ -1,4 +1,4 @@
-# Lizy File Hash Tool v1.0
+# Lizy File Hash Tool v1.1
 
 轻量、快速的跨平台文件校验工具。核心使用 C++17 实现，同一文件只读取一次即可同时计算多个算法；多个文件使用独立 worker 并发处理。
 
@@ -14,10 +14,27 @@ A lightweight and fast cross-platform file verification tool. The shared core is
 - Each file has an independent progress bar, plus an overall progress bar for all files.
 - 支持 Delete 键、右键菜单、Clean all、复制单条结果和复制全部结果。
 - Supports the Delete key, a context menu, Clean all, copying one result, and copying all results.
+- 点击 Compare 后可勾选两条记录，点击 Confirm 自动比较已计算的 MD5、SHA 和其他校验结果。
+- Click Compare to select two records, then click Confirm to compare their calculated MD5, SHA, and other hash values.
+- 默认使用中文界面，点击主界面的 `English` 按钮可切换到英文；切换后按钮显示 `中文`。确认比较后会弹窗显示一致或不一致，也可取消比较。
+- Chinese is the default UI language. Click the `English` button on the main window to switch to English; the button then becomes `中文`. Confirmation shows a comparison dialog, and an active comparison can be cancelled.
 - 复制结果包含每个文件的绝对路径、文件名、文件大小、修改时间、状态及各算法结果，每个属性独立一行。
 - Copied results include the absolute path and file name, size, modified time, status, and each algorithm result, with one attribute per line.
 - 无文件时显示“文件拖拽到此处”提示，并使用蓝色钥匙主题图标。
 - An empty list displays “文件拖拽到此处” and the application uses a blue key-themed icon.
+- Windows 与 Linux GUI 提供醒目的文件拖放卡片和六套可即时切换的主题，主题选择会在下次启动时自动恢复。
+- The Windows and Linux GUIs provide a prominent file drop-zone card and six instantly switchable themes; the selected theme is restored on the next launch.
+
+## 界面主题 / UI themes
+
+GUI 内置 Arctic Blue、Midnight Cyan、Warm Orange、Jade Mist、Violet Cloud 和 Graphite Amber 六套主题。所有主题共用相同的布局与交互，仅替换语义化颜色，兼顾浅色、深色和高对比使用场景。
+
+The GUI includes Arctic Blue, Midnight Cyan, Warm Orange, Jade Mist, Violet Cloud, and Graphite Amber. Every theme shares the same layout and interaction model while replacing semantic colors for light, dark, and high-contrast use cases.
+
+- Windows：点击窗口右上角的 `Theme` 按钮选择主题；设置保存在当前用户注册表中。
+- Linux：使用窗口右上角的主题下拉框；设置保存在用户配置目录中。
+- Windows: choose a theme from the `Theme` button in the upper-right corner; the choice is stored in the current user's registry.
+- Linux: use the theme drop-down in the upper-right corner; the choice is stored in the user's configuration directory.
 
 ## 支持平台 / Supported platforms
 
@@ -77,9 +94,9 @@ The application reads files and calculates hashes locally. It does not upload fi
 
 ## 当前状态与限制 / Status and limitations
 
-1.0 版本已完成核心算法、多文件并发、取消语义和原生 GUI。当前仓库发布源码和构建配置，不跟踪 EXE、调试符号或构建目录；尚未提供安装程序，也尚未加入校验值比对工作流。
+1.1 版本在 1.0 的基础上加入两条记录的校验结果比对。当前仓库发布源码和构建配置，不跟踪 EXE、调试符号或构建目录；尚未提供安装程序。
 
-Version 1.0 includes the hashing core, multi-file concurrency, cancellation semantics, and native GUIs. This repository publishes source code and build configuration only; executables, debug symbols, and build directories are not tracked. An installer and hash-comparison workflow are not included yet.
+Version 1.1 adds two-record hash-result comparison on top of the 1.0 hashing core, multi-file concurrency, cancellation semantics, and native GUIs. This repository publishes source code and build configuration only; executables, debug symbols, and build directories are not tracked. An installer is not included yet.
 
 ## 贡献 / Contributing
 
