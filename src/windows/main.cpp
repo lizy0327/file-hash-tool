@@ -854,11 +854,10 @@ void layout(State& state, const int width, const int height) {
     ListView_SetColumnWidth(state.list, 2, std::max(240, content_width * 68 / 100 - 105));
 }
 
-int list_row_at_point(HWND list, POINT point, LVHITTESTINFO* hit_info) {
+int list_row_at_point(HWND list, POINT point) {
     LVHITTESTINFO hit{};
     hit.pt = point;
     const int hit_index = ListView_SubItemHitTest(list, &hit);
-    if (hit_info != nullptr) *hit_info = hit;
     if (hit_index >= 0) return hit_index;
 
     // 中文：补充整行的垂直命中判断，覆盖文件名后面的空白区域 / English: Use row bounds as a fallback so blank space after a file name remains clickable.
@@ -880,9 +879,8 @@ LRESULT CALLBACK list_window_proc(HWND window, UINT message, WPARAM wparam, LPAR
             static_cast<SHORT>(LOWORD(lparam)),
             static_cast<SHORT>(HIWORD(lparam)),
         };
-        LVHITTESTINFO hit{};
-        const int index = list_row_at_point(window, point, &hit);
-        if (index >= 0 && (hit.flags & LVHT_ONITEMSTATEICON) == 0) {
+        const int index = list_row_at_point(window, point);
+        if (index >= 0) {
             ListView_SetCheckState(window, index, !ListView_GetCheckState(window, index));
             ListView_SetItemState(window, -1, 0, LVIS_SELECTED);
             ListView_SetItemState(window, index, LVIS_SELECTED, LVIS_SELECTED);
