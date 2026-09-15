@@ -1,5 +1,6 @@
 #include "app/result_text.h"
 #include "app/file_metadata.h"
+#include "app/language.h"
 #include "app/theme.h"
 #include "resource.h"
 #include "core/hash_engine.h"
@@ -27,6 +28,8 @@ constexpr int kCancelAll = 1004;
 constexpr int kCleanAll = 1005;
 constexpr int kThemePicker = 1006;
 constexpr int kCompare = 1007;
+constexpr int kConfirmCompare = 1008;
+constexpr int kLanguageBase = 1400;
 constexpr int kContextCopy = 2001;
 constexpr int kContextDelete = 2002;
 constexpr int kContextSelectAll = 2003;
@@ -103,6 +106,7 @@ struct State {
     HWND clean_all = nullptr;
     HWND theme_picker = nullptr;
     HWND compare_button = nullptr;
+    HWND confirm_compare = nullptr;
     HWND title = nullptr;
     HWND subtitle = nullptr;
     HWND algorithm_group = nullptr;
@@ -116,12 +120,26 @@ struct State {
     HBRUSH surface_brush = nullptr;
     HBRUSH drop_zone_brush = nullptr;
     filehash::ui::ThemeId theme = filehash::ui::ThemeId::ArcticBlue;
+    filehash::ui::Language language = filehash::ui::Language::Chinese;
     // 中文：显式保存复选框状态，确保自绘控件在 Windows 7/10/11 上一致显示 / English: Keep checkbox state explicitly so owner-drawn controls render consistently on Windows 7/10/11
     std::array<bool, 6> algorithm_checked{{false, true, false, true, false, false}};
     bool compare_mode = false;
     std::vector<Row> rows;
     std::uint64_t next_id = 1;
 };
+
+std::wstring widen(const std::string& value);
+void apply_language(State& state, filehash::ui::Language language, bool persist);
+
+const wchar_t* tr(const State& state, const wchar_t* chinese, const wchar_t* english) {
+    return state.language == filehash::ui::Language::Chinese ? chinese : english;
+}
+
+std::wstring theme_display_name(const State& state, const filehash::ui::ThemeId theme) {
+    if (state.language == filehash::ui::Language::English) return widen(filehash::ui::theme_info(theme).name);
+    static constexpr const wchar_t* names[] = {L"极地蓝", L"午夜青", L"暖橙", L"翡翠雾", L"紫罗兰云", L"石墨琥珀"};
+    return names[filehash::ui::theme_index(theme)];
+}
 
 std::wstring widen(const std::string& value) {
     if (value.empty()) return {};
@@ -130,15 +148,24 @@ std::wstring widen(const std::string& value) {
     MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), size);
     return result;
 }
-std::wstring result_text(const filehash::HashFileResult& result) { return widen(filehash::ui::format_result_values(result)); }
-std::wstring widen_lines(const std::string& value) {
-    std::wstring result;
-    const std::wstring wide = widen(value);
-    for (const wchar_t character : wide) {
-        if (character == L'\n') result += L"\r\n";
-        else result += character;
+std::wstring result_text(const State& state, const filehash::HashFileResult& result) {
+    if (!result.error.empty()) return std::wstring(tr(state, L"错误：", L"Error: ")) + widen(result.error);
+    if (result.cancelled) return tr(state, L"已取消", L"Cancelled");
+    return widen(filehash::ui::format_result_values(result));
+}
+std::wstring result_lines(const State& state, const filehash::HashFileResult& result) {
+    if (!result.error.empty()) return std::wstring(tr(state, L"错误：", L"Error: ")) + widen(result.error);
+    if (result.cancelled) return std::wstring(tr(state, L"状态：已取消", L"Status: Cancelled"));
+    if (result.values.empty()) return std::wstring(tr(state, L"状态：没有结果", L"Status: No result"));
+    std::wstring output;
+    for (const auto& value : result.values) {
+        output += widen(filehash::algorithm_name(value.algorithm));
+        output += L": ";
+        output += widen(filehash::format_hex(value.bytes));
+        output += L"\r\n";
     }
-    return result;
+    if (!output.empty()) output.resize(output.size() - 2);
+    return output;
 }
 void set_text(HWND control, const std::wstring& text) { SetWindowTextW(control, text.c_str()); }
 
@@ -164,6 +191,22 @@ filehash::ui::ThemeId load_theme() {
 void save_theme(const filehash::ui::ThemeId theme) {
     const DWORD value = static_cast<DWORD>(filehash::ui::theme_index(theme));
     RegSetKeyValueW(HKEY_CURRENT_USER, L"Software\\Lizy\\FileHashTool", L"Theme", REG_DWORD,
+                    &value, sizeof(value));
+}
+
+filehash::ui::Language load_language() {
+    DWORD value = 0;
+    DWORD size = sizeof(value);
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\Lizy\\FileHashTool", L"Language", RRF_RT_REG_DWORD,
+                     nullptr, &value, &size) != ERROR_SUCCESS) {
+        return filehash::ui::Language::Chinese;
+    }
+    return filehash::ui::language_from_index(value);
+}
+
+void save_language(const filehash::ui::Language language) {
+    const DWORD value = static_cast<DWORD>(filehash::ui::language_index(language));
+    RegSetKeyValueW(HKEY_CURRENT_USER, L"Software\\Lizy\\FileHashTool", L"Language", REG_DWORD,
                     &value, sizeof(value));
 }
 
@@ -201,8 +244,8 @@ void apply_theme(State& state, const filehash::ui::ThemeId theme, const bool per
         SendMessageW(progress, PBM_SETBKCOLOR, 0, colors.progress_track);
     }
     if (state.theme_picker != nullptr) {
-        const std::wstring name = widen(filehash::ui::theme_info(theme).name);
-        set_text(state.theme_picker, L"Theme: " + name + L"  ▾");
+        set_text(state.theme_picker, std::wstring(tr(state, L"主题：", L"Theme: ")) +
+            theme_display_name(state, theme) + L"  ▾");
     }
     update_title_bar(state.window, filehash::ui::theme_info(theme).dark);
     if (persist) save_theme(theme);
@@ -214,10 +257,15 @@ void show_theme_menu(State& state) {
     if (menu == nullptr) return;
     const auto selected = filehash::ui::theme_index(state.theme);
     for (std::size_t index = 0; index < filehash::ui::kThemes.size(); ++index) {
-        const auto label = widen(filehash::ui::kThemes[index].name);
+        const auto label = theme_display_name(state, filehash::ui::theme_from_index(index));
         AppendMenuW(menu, MF_STRING | (index == selected ? MF_CHECKED : 0),
                     kThemeBase + static_cast<UINT>(index), label.c_str());
     }
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING | (state.language == filehash::ui::Language::Chinese ? MF_CHECKED : 0),
+                kLanguageBase, L"中文");
+    AppendMenuW(menu, MF_STRING | (state.language == filehash::ui::Language::English ? MF_CHECKED : 0),
+                kLanguageBase + 1, L"English");
     RECT button{};
     GetWindowRect(state.theme_picker, &button);
     const int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
@@ -232,7 +280,7 @@ void draw_button(const State& state, const DRAWITEMSTRUCT& item) {
     const auto& colors = palette(state);
     const bool disabled = (item.itemState & ODS_DISABLED) != 0;
     const bool pressed = (item.itemState & ODS_SELECTED) != 0;
-    const bool primary = item.hwndItem == state.add_files || item.hwndItem == state.compare_button;
+    const bool primary = item.hwndItem == state.add_files || item.hwndItem == state.confirm_compare;
     const bool danger = item.hwndItem == state.delete_files;
     COLORREF fill = disabled ? colors.disabled_bg : (primary ? colors.primary : colors.surface);
     COLORREF border = disabled ? colors.border : (danger ? colors.danger : (primary ? colors.primary : colors.border));
@@ -385,7 +433,8 @@ void update_action_buttons(State& state) {
     EnableWindow(state.delete_files, state.rows.empty() ? FALSE : TRUE);
     EnableWindow(state.clean_all, state.rows.empty() ? FALSE : TRUE);
     EnableWindow(state.cancel_all, any_running(state) ? TRUE : FALSE);
-    EnableWindow(state.compare_button, state.rows.size() >= 2 ? TRUE : FALSE);
+    EnableWindow(state.compare_button, state.compare_mode || state.rows.size() >= 2 ? TRUE : FALSE);
+    EnableWindow(state.confirm_compare, state.compare_mode ? TRUE : FALSE);
     if (state.empty_hint != nullptr) ShowWindow(state.empty_hint, state.rows.empty() ? SW_SHOW : SW_HIDE);
 }
 
@@ -393,12 +442,45 @@ void update_summary(State& state) {
     if (any_running(state)) {
         std::size_t running = 0;
         for (const auto& row : state.rows) if (row.job) ++running;
-        set_text(state.status, L"Calculating " + std::to_wstring(running) + L" file(s) in parallel...");
+        set_text(state.status, std::wstring(tr(state, L"正在并行计算 ", L"Calculating ")) +
+            std::to_wstring(running) + tr(state, L" 个文件...", L" file(s) in parallel..."));
     } else if (state.rows.empty()) {
-        set_text(state.status, L"Ready — add files or drag them here");
+        set_text(state.status, tr(state, L"准备就绪——添加文件或将文件拖到这里", L"Ready — add files or drag them here"));
     } else {
-        set_text(state.status, L"Finished — copy results or add more files");
+        set_text(state.status, tr(state, L"已完成——复制结果或继续添加文件", L"Finished — copy results or add more files"));
     }
+}
+
+void apply_language(State& state, const filehash::ui::Language language, const bool persist) {
+    state.language = language;
+    set_text(state.title, L"Lizy File Hash Tool v1.1");
+    set_text(state.subtitle, tr(state, L"快速、本地、隐私优先的文件校验", L"Fast, local and privacy-first file verification"));
+    set_text(state.add_files, tr(state, L"添加文件", L"Add files"));
+    set_text(state.copy_results, tr(state, L"复制结果", L"Copy results"));
+    set_text(state.delete_files, tr(state, L"删除", L"Delete"));
+    set_text(state.clean_all, tr(state, L"清空全部", L"Clean all"));
+    set_text(state.cancel_all, tr(state, L"取消全部", L"Cancel all"));
+    set_text(state.compare_button, state.compare_mode ? tr(state, L"取消比较", L"Cancel") : tr(state, L"比较", L"Compare"));
+    set_text(state.confirm_compare, tr(state, L"确认", L"Confirm"));
+    set_text(state.algorithm_group, tr(state, L"算法", L"Algorithms"));
+    set_text(state.drop_hint, tr(state, L"将文件拖到窗口任意位置——每个文件独立开始计算",
+                                L"Drop files anywhere in this window — each file starts independently"));
+    set_text(state.file_progress_label, std::wstring(tr(state, L"文件进度  ", L"File progress  ")) + L"0%");
+    set_text(state.progress_label, std::wstring(tr(state, L"全部文件  ", L"All files  ")) + L"0%");
+    set_text(state.empty_hint, tr(state, L"文件拖拽到此处", L"Drop files here"));
+    const wchar_t* columns[] = {tr(state, L"文件", L"File"), tr(state, L"状态", L"Status"),
+                                tr(state, L"校验结果", L"Hash values")};
+    for (int index = 0; index < 3; ++index) {
+        LVCOLUMNW column{};
+        column.mask = LVCF_TEXT;
+        column.pszText = const_cast<wchar_t*>(columns[index]);
+        ListView_SetColumn(state.list, index, &column);
+    }
+    set_text(state.theme_picker, std::wstring(tr(state, L"主题：", L"Theme: ")) +
+        theme_display_name(state, state.theme) + L"  ▾");
+    if (persist) save_language(language);
+    update_summary(state);
+    RedrawWindow(state.window, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME);
 }
 
 void update_overall_progress(State& state) {
@@ -408,7 +490,7 @@ void update_overall_progress(State& state) {
     const int percent = total == 0 ? (any_running(state) ? 0 : (state.rows.empty() ? 0 : 100)) :
         static_cast<int>(std::min<std::uint64_t>(100, completed * 100 / total));
     SendMessageW(state.progress, PBM_SETPOS, percent, 0);
-    set_text(state.progress_label, L"All files  " + std::to_wstring(percent) + L"%");
+    set_text(state.progress_label, std::wstring(tr(state, L"全部文件  ", L"All files  ")) + std::to_wstring(percent) + L"%");
 }
 
 void update_file_progress(State& state, const std::uint64_t id, const std::uint64_t bytes_read,
@@ -419,7 +501,7 @@ void update_file_progress(State& state, const std::uint64_t id, const std::uint6
     SendMessageW(state.file_progress, PBM_SETPOS, percent, 0);
     const int index = find_row_index(state, id);
     if (index >= 0) {
-        const std::wstring label = L"File progress  " + std::to_wstring(percent) + L"%";
+        const std::wstring label = std::wstring(tr(state, L"文件进度  ", L"File progress  ")) + std::to_wstring(percent) + L"%";
         set_text(state.file_progress_label, label);
     }
 }
@@ -445,8 +527,8 @@ void add_path(State& state, const std::filesystem::path& path) {
     item.iItem = index;
     item.pszText = const_cast<wchar_t*>(text.c_str());
     ListView_InsertItem(state.list, &item);
-    ListView_SetItemText(state.list, index, 1, const_cast<wchar_t*>(L"Queued"));
-    ListView_SetItemText(state.list, index, 2, const_cast<wchar_t*>(L"Starting automatically..."));
+    ListView_SetItemText(state.list, index, 1, const_cast<wchar_t*>(tr(state, L"排队中", L"Queued")));
+    ListView_SetItemText(state.list, index, 2, const_cast<wchar_t*>(tr(state, L"自动开始计算...", L"Starting automatically...")));
     start_file(state, state.rows.back().id);
     update_action_buttons(state);
     update_summary(state);
@@ -479,7 +561,7 @@ void update_row_progress(State& state, const ProgressMessage& message) {
     const int index = find_row_index(state, message.id);
     if (index >= 0) {
         const int percent = message.total_bytes == 0 ? 100 : static_cast<int>(std::min<std::uint64_t>(100, message.bytes_read * 100 / message.total_bytes));
-        const std::wstring status = L"Running " + std::to_wstring(percent) + L"%";
+        const std::wstring status = std::wstring(tr(state, L"计算中 ", L"Running ")) + std::to_wstring(percent) + L"%";
         ListView_SetItemText(state.list, index, 1, const_cast<wchar_t*>(status.c_str()));
     }
     update_file_progress(state, message.id, message.bytes_read, message.total_bytes);
@@ -493,9 +575,9 @@ void update_row(State& state, const ResultMessage& message) {
     row->has_result = true;
     const int index = find_row_index(state, message.id);
     if (index >= 0) {
-        const std::wstring status = message.result.error.empty() && !message.result.cancelled ? L"Done" :
-            (message.result.cancelled ? L"Cancelled" : L"Error");
-        const std::wstring text = result_text(message.result);
+        const std::wstring status = message.result.error.empty() && !message.result.cancelled ? tr(state, L"已完成", L"Done") :
+            (message.result.cancelled ? tr(state, L"已取消", L"Cancelled") : tr(state, L"错误", L"Error"));
+        const std::wstring text = result_text(state, message.result);
         ListView_SetItemText(state.list, index, 1, const_cast<wchar_t*>(status.c_str()));
         ListView_SetItemText(state.list, index, 2, const_cast<wchar_t*>(text.c_str()));
     }
@@ -509,7 +591,7 @@ void start_file(State& state, const std::uint64_t id) {
     if (row == nullptr || row->job) return;
     const auto algorithms = selected_algorithms(state);
     if (algorithms.empty()) {
-        set_text(state.status, L"Select at least one algorithm");
+        set_text(state.status, tr(state, L"请至少选择一种算法", L"Select at least one algorithm"));
         return;
     }
     const auto path = row->path;
@@ -547,7 +629,7 @@ void finish_file(State& state, const std::uint64_t id) {
 
 void cancel_all(State& state) {
     for (auto& row : state.rows) if (row.job) row.job->cancel->store(true);
-    set_text(state.status, L"Cancelling active files...");
+    set_text(state.status, tr(state, L"正在取消计算中的文件...", L"Cancelling active files..."));
 }
 
 void delete_selected(State& state) {
@@ -587,20 +669,20 @@ std::wstring copy_result_text(const State& state, const std::vector<int>& indexe
     for (const int index : indexes) {
         if (index < 0 || index >= static_cast<int>(state.rows.size())) continue;
         const auto& row = state.rows[static_cast<std::size_t>(index)];
-        output += L"File: " + row.path.wstring() + L"\r\n";
-        output += L"Size: " + std::to_wstring(row.total_bytes) + L" bytes\r\n";
-        output += L"Modified: " + widen(filehash::ui::format_file_time(row.path)) + L"\r\n";
+        output += std::wstring(tr(state, L"文件：", L"File: ")) + row.path.wstring() + L"\r\n";
+        output += std::wstring(tr(state, L"大小：", L"Size: ")) + std::to_wstring(row.total_bytes) + tr(state, L" 字节\r\n", L" bytes\r\n");
+        output += std::wstring(tr(state, L"修改时间：", L"Modified: ")) + widen(filehash::ui::format_file_time(row.path)) + L"\r\n";
         if (row.has_result) {
             const wchar_t* status = row.result.error.empty() && !row.result.cancelled
-                ? L"Done" : (row.result.cancelled ? L"Cancelled" : L"Error");
-            output += L"Status: ";
+                ? tr(state, L"已完成", L"Done") : (row.result.cancelled ? tr(state, L"已取消", L"Cancelled") : tr(state, L"错误", L"Error"));
+            output += tr(state, L"状态：", L"Status: ");
             output += status;
             output += L"\r\n";
-            output += widen_lines(filehash::ui::format_result_lines(row.result));
+            output += result_lines(state, row.result);
         } else if (row.job) {
-            output += L"Status: Calculating...";
+            output += tr(state, L"状态：计算中...", L"Status: Calculating...");
         } else {
-            output += L"Status: Queued";
+            output += tr(state, L"状态：排队中", L"Status: Queued");
         }
         output += L"\r\n\r\n";
     }
@@ -627,26 +709,26 @@ void copy_text_to_clipboard(State& state, const std::wstring& text, const wchar_
 }
 
 void copy_results(State& state) {
-    copy_text_to_clipboard(state, copy_result_text(state, all_indexes(state)), L"All results copied.");
+    copy_text_to_clipboard(state, copy_result_text(state, all_indexes(state)), tr(state, L"全部结果已复制。", L"All results copied."));
 }
 
 void copy_selected_results(State& state) {
     const auto indexes = selected_indexes(state);
     if (indexes.empty()) {
-        set_text(state.status, L"Select a result row first.");
+        set_text(state.status, tr(state, L"请先选择一条结果记录。", L"Select a result row first."));
         return;
     }
-    copy_text_to_clipboard(state, copy_result_text(state, indexes), L"Result copied.");
+    copy_text_to_clipboard(state, copy_result_text(state, indexes), tr(state, L"结果已复制。", L"Result copied."));
 }
 
 void copy_row(State& state, const int index) {
     if (index < 0 || index >= static_cast<int>(state.rows.size())) return;
-    copy_text_to_clipboard(state, copy_result_text(state, {index}), L"Result copied.");
+    copy_text_to_clipboard(state, copy_result_text(state, {index}), tr(state, L"结果已复制。", L"Result copied."));
 }
 
 void select_all(State& state) {
     ListView_SetItemState(state.list, -1, LVIS_SELECTED, LVIS_SELECTED);
-    set_text(state.status, L"All rows selected.");
+    set_text(state.status, tr(state, L"已全选所有记录。", L"All rows selected."));
 }
 
 void show_context_menu(State& state, POINT screen_point) {
@@ -664,9 +746,9 @@ void show_context_menu(State& state, POINT screen_point) {
 
     HMENU menu = CreatePopupMenu();
     if (menu == nullptr) return;
-    AppendMenuW(menu, MF_STRING, kContextCopy, L"Copy result");
-    AppendMenuW(menu, MF_STRING, kContextDelete, L"Delete");
-    AppendMenuW(menu, MF_STRING, kContextSelectAll, L"Select all");
+    AppendMenuW(menu, MF_STRING, kContextCopy, tr(state, L"复制结果", L"Copy result"));
+    AppendMenuW(menu, MF_STRING, kContextDelete, tr(state, L"删除", L"Delete"));
+    AppendMenuW(menu, MF_STRING, kContextSelectAll, tr(state, L"全选", L"Select all"));
     SetMenuDefaultItem(menu, kContextCopy, FALSE);
     const int command = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON,
                                        screen_point.x, screen_point.y, 0, state.window, nullptr);
@@ -686,8 +768,8 @@ void clean_all(State& state) {
     ListView_DeleteAllItems(state.list);
     SendMessageW(state.file_progress, PBM_SETPOS, 0, 0);
     SendMessageW(state.progress, PBM_SETPOS, 0, 0);
-    set_text(state.file_progress_label, L"File progress  0%");
-    set_text(state.progress_label, L"All files  0%");
+    set_text(state.file_progress_label, std::wstring(tr(state, L"文件进度  ", L"File progress  ")) + L"0%");
+    set_text(state.progress_label, std::wstring(tr(state, L"全部文件  ", L"All files  ")) + L"0%");
     update_action_buttons(state);
     update_summary(state);
 }
@@ -697,18 +779,21 @@ void set_compare_mode(State& state, const bool enabled) {
     DWORD styles = ListView_GetExtendedListViewStyle(state.list);
     if (enabled) {
         styles |= LVS_EX_CHECKBOXES;
-        SetWindowTextW(state.compare_button, L"Confirm");
+        SetWindowTextW(state.compare_button, tr(state, L"取消比较", L"Cancel"));
+        ShowWindow(state.confirm_compare, SW_SHOW);
     } else {
         for (int index = 0; index < static_cast<int>(state.rows.size()); ++index) {
             ListView_SetCheckState(state.list, index, FALSE);
         }
         styles &= ~LVS_EX_CHECKBOXES;
-        SetWindowTextW(state.compare_button, L"Compare");
+        SetWindowTextW(state.compare_button, tr(state, L"比较", L"Compare"));
+        ShowWindow(state.confirm_compare, SW_HIDE);
     }
     ListView_SetExtendedListViewStyle(state.list, styles);
     update_action_buttons(state);
     RedrawWindow(state.list, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
     RedrawWindow(state.compare_button, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE);
+    RedrawWindow(state.confirm_compare, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE);
 }
 
 void compare_files(State& state) {
@@ -717,35 +802,41 @@ void compare_files(State& state) {
         if (ListView_GetCheckState(state.list, index)) indexes.push_back(index);
     }
     if (indexes.size() != 2) {
-        set_text(state.status, L"Select exactly two files, then click Confirm.");
+        set_text(state.status, tr(state, L"请选择恰好两条记录，再点击“确认”。", L"Select exactly two files, then click Confirm."));
         return;
     }
     const Row& left = state.rows[static_cast<std::size_t>(indexes[0])];
     const Row& right = state.rows[static_cast<std::size_t>(indexes[1])];
     if (left.job || right.job || !left.has_result || !right.has_result) {
-        set_text(state.status, L"Please wait until both files finish hashing.");
+        set_text(state.status, tr(state, L"请等待两条记录都完成校验。", L"Please wait until both files finish hashing."));
         return;
     }
     if (!left.result.error.empty() || !right.result.error.empty() || left.result.cancelled || right.result.cancelled) {
-        set_text(state.status, L"Cannot compare files with a failed or cancelled result.");
+        set_text(state.status, tr(state, L"校验失败或已取消的记录不能比较。", L"Cannot compare files with a failed or cancelled result."));
         return;
     }
     const bool equal = filehash::hash_results_equal(left.result, right.result);
-    set_text(state.status, equal ? L"Compare result: the two files are identical."
-                                 : L"Compare result: the two files are different.");
+    const wchar_t* message = equal
+        ? tr(state, L"这两个文件一致。\n\n所有已计算的校验值均相同。", L"The two files are identical.\n\nAll calculated hash values match.")
+        : tr(state, L"这两个文件不一致。\n\n至少有一个校验值不同。", L"The two files are different.\n\nAt least one calculated hash value differs.");
+    MessageBoxW(state.window, message, tr(state, L"比较结果", L"Comparison result"),
+                MB_OK | (equal ? MB_ICONINFORMATION : MB_ICONWARNING));
+    set_text(state.status, equal ? tr(state, L"比较结果：两个文件一致。", L"Compare result: the two files are identical.")
+                                 : tr(state, L"比较结果：两个文件不一致。", L"Compare result: the two files are different."));
     set_compare_mode(state, false);
 }
 
 void layout(State& state, const int width, const int height) {
     const int content_width = std::max(100, width - 32);
-    MoveWindow(state.title, 16, 14, 500, 32, TRUE);
+    MoveWindow(state.title, 16, 14, 380, 32, TRUE);
     MoveWindow(state.subtitle, 16, 47, 620, 22, TRUE);
-    MoveWindow(state.add_files, width - 728, 18, 88, 32, TRUE);
-    MoveWindow(state.copy_results, width - 630, 18, 100, 32, TRUE);
-    MoveWindow(state.delete_files, width - 520, 18, 80, 32, TRUE);
-    MoveWindow(state.clean_all, width - 430, 18, 80, 32, TRUE);
-    MoveWindow(state.cancel_all, width - 340, 18, 88, 32, TRUE);
-    MoveWindow(state.compare_button, width - 248, 18, 88, 32, TRUE);
+    MoveWindow(state.add_files, width - 822, 18, 82, 32, TRUE);
+    MoveWindow(state.copy_results, width - 730, 18, 94, 32, TRUE);
+    MoveWindow(state.delete_files, width - 626, 18, 76, 32, TRUE);
+    MoveWindow(state.clean_all, width - 540, 18, 76, 32, TRUE);
+    MoveWindow(state.cancel_all, width - 444, 18, 86, 32, TRUE);
+    MoveWindow(state.compare_button, width - 346, 18, 88, 32, TRUE);
+    MoveWindow(state.confirm_compare, width - 248, 18, 88, 32, TRUE);
     MoveWindow(state.theme_picker, width - 150, 18, 134, 32, TRUE);
     MoveWindow(state.algorithm_group, 16, 78, content_width, 56, TRUE);
     for (int index = 0; index < 6; ++index) MoveWindow(state.checks[index], 32 + index * 98, 100, 91, 20, TRUE);
@@ -776,6 +867,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
     switch (message) {
         case WM_CREATE: {
             state->theme = load_theme();
+            state->language = load_language();
             state->font = CreateFontW(-14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
                                       OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                       DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
@@ -793,6 +885,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             state->cancel_all = CreateWindowW(L"BUTTON", L"Cancel all", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCancelAll), nullptr, nullptr);
             state->clean_all = CreateWindowW(L"BUTTON", L"Clean all", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCleanAll), nullptr, nullptr);
             state->compare_button = CreateWindowW(L"BUTTON", L"Compare", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCompare), nullptr, nullptr);
+            state->confirm_compare = CreateWindowW(L"BUTTON", L"Confirm", WS_CHILD | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kConfirmCompare), nullptr, nullptr);
             state->theme_picker = CreateWindowW(L"BUTTON", L"Theme", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kThemePicker), nullptr, nullptr);
             state->algorithm_group = CreateWindowW(L"STATIC", L"Algorithms", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 0, 0, 0, 0, window, nullptr, nullptr, nullptr);
             for (int index = 0; index < 6; ++index) {
@@ -821,12 +914,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
             state->status = CreateWindowW(L"STATIC", L"Ready — add files or drag them here", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kStatus), nullptr, nullptr);
-            for (HWND control : {state->title, state->subtitle, state->add_files, state->copy_results, state->delete_files, state->cancel_all, state->clean_all, state->compare_button, state->theme_picker, state->algorithm_group, state->drop_hint, state->file_progress_label, state->file_progress, state->progress_label, state->progress, state->list, state->status}) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
+            for (HWND control : {state->title, state->subtitle, state->add_files, state->copy_results, state->delete_files, state->cancel_all, state->clean_all, state->compare_button, state->confirm_compare, state->theme_picker, state->algorithm_group, state->drop_hint, state->file_progress_label, state->file_progress, state->progress_label, state->progress, state->list, state->status}) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
             SendMessageW(state->empty_hint, WM_SETFONT, reinterpret_cast<WPARAM>(state->empty_hint_font), TRUE);
             SendMessageW(state->title, WM_SETFONT, reinterpret_cast<WPARAM>(state->title_font), TRUE);
             for (HWND check : state->checks) SendMessageW(check, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
             DragAcceptFiles(window, TRUE);
             apply_theme(*state, state->theme, false);
+            apply_language(*state, state->language, false);
             return 0;
         }
         case WM_SIZE: layout(*state, LOWORD(lparam), HIWORD(lparam)); return 0;
@@ -838,13 +932,19 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 case kCancelAll: cancel_all(*state); return 0;
                 case kCleanAll: clean_all(*state); return 0;
                 case kCompare:
-                    if (state->compare_mode) compare_files(*state);
+                    if (state->compare_mode) {
+                        set_compare_mode(*state, false);
+                        set_text(state->status, tr(*state, L"已取消比较。", L"Comparison cancelled."));
+                    }
                     else {
                         set_compare_mode(*state, true);
-                        set_text(state->status, L"Select exactly two files, then click Confirm.");
+                        set_text(state->status, tr(*state, L"请选择两条记录，再点击“确认”。", L"Select two records, then click Confirm."));
                     }
                     return 0;
+                case kConfirmCompare: compare_files(*state); return 0;
                 case kThemePicker: show_theme_menu(*state); return 0;
+                case kLanguageBase: apply_language(*state, filehash::ui::Language::Chinese, true); return 0;
+                case kLanguageBase + 1: apply_language(*state, filehash::ui::Language::English, true); return 0;
                 default:
                     if (LOWORD(wparam) >= kAlgorithmBase && LOWORD(wparam) < kAlgorithmBase + 6 && HIWORD(wparam) == BN_CLICKED) {
                         const int index = LOWORD(wparam) - kAlgorithmBase;
@@ -878,6 +978,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             if (item->hwndItem == state->add_files || item->hwndItem == state->copy_results ||
                 item->hwndItem == state->delete_files || item->hwndItem == state->cancel_all ||
                 item->hwndItem == state->clean_all || item->hwndItem == state->compare_button ||
+                item->hwndItem == state->confirm_compare ||
                 item->hwndItem == state->theme_picker) {
                 draw_button(*state, *item);
                 return TRUE;
@@ -895,6 +996,11 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             if (reinterpret_cast<NMHDR*>(lparam)->hwndFrom == state->list && reinterpret_cast<NMHDR*>(lparam)->code == LVN_KEYDOWN) {
                 auto* key = reinterpret_cast<LPNMLVKEYDOWN>(lparam);
                 if (key->wVKey == VK_DELETE) { delete_selected(*state); return 0; }
+                if (key->wVKey == VK_ESCAPE && state->compare_mode) {
+                    set_compare_mode(*state, false);
+                    set_text(state->status, tr(*state, L"已取消比较。", L"Comparison cancelled."));
+                    return 0;
+                }
                 if (key->wVKey == 'C' && (GetKeyState(VK_CONTROL) & 0x8000) != 0) { copy_selected_results(*state); return 0; }
             }
             if (reinterpret_cast<NMHDR*>(lparam)->hwndFrom == state->list && reinterpret_cast<NMHDR*>(lparam)->code == NM_RCLICK) {

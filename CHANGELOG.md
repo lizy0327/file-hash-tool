@@ -24,11 +24,13 @@
 
 - 新增 Compare / Confirm 流程，可选择两条记录并根据已计算的校验值判断文件是否一致。
 - 比较只依据校验结果，不将文件路径、大小或修改时间作为内容一致性的判断依据。
+- 增加比较结果弹窗、取消比较操作和 Esc 快捷键；界面默认中文并支持切换 English。
 
 ### English
 
 - Adds a Compare / Confirm flow for selecting two records and checking whether their calculated hash values match.
 - Comparison uses hash results only; file paths, sizes, and modified times are not used as content-equality criteria.
+- Adds a comparison result dialog, comparison cancellation, and the Esc shortcut; Chinese is the default UI language with English available.
 
 ## 1.0.0 — 2026-09-10
 
