@@ -26,6 +26,7 @@ constexpr int kDeleteFiles = 1003;
 constexpr int kCancelAll = 1004;
 constexpr int kCleanAll = 1005;
 constexpr int kThemePicker = 1006;
+constexpr int kCompare = 1007;
 constexpr int kContextCopy = 2001;
 constexpr int kContextDelete = 2002;
 constexpr int kContextSelectAll = 2003;
@@ -101,6 +102,7 @@ struct State {
     HWND cancel_all = nullptr;
     HWND clean_all = nullptr;
     HWND theme_picker = nullptr;
+    HWND compare_button = nullptr;
     HWND title = nullptr;
     HWND subtitle = nullptr;
     HWND algorithm_group = nullptr;
@@ -116,6 +118,7 @@ struct State {
     filehash::ui::ThemeId theme = filehash::ui::ThemeId::ArcticBlue;
     // 中文：显式保存复选框状态，确保自绘控件在 Windows 7/10/11 上一致显示 / English: Keep checkbox state explicitly so owner-drawn controls render consistently on Windows 7/10/11
     std::array<bool, 6> algorithm_checked{{false, true, false, true, false, false}};
+    bool compare_mode = false;
     std::vector<Row> rows;
     std::uint64_t next_id = 1;
 };
@@ -229,7 +232,7 @@ void draw_button(const State& state, const DRAWITEMSTRUCT& item) {
     const auto& colors = palette(state);
     const bool disabled = (item.itemState & ODS_DISABLED) != 0;
     const bool pressed = (item.itemState & ODS_SELECTED) != 0;
-    const bool primary = item.hwndItem == state.add_files;
+    const bool primary = item.hwndItem == state.add_files || item.hwndItem == state.compare_button;
     const bool danger = item.hwndItem == state.delete_files;
     COLORREF fill = disabled ? colors.disabled_bg : (primary ? colors.primary : colors.surface);
     COLORREF border = disabled ? colors.border : (danger ? colors.danger : (primary ? colors.primary : colors.border));
@@ -382,6 +385,7 @@ void update_action_buttons(State& state) {
     EnableWindow(state.delete_files, state.rows.empty() ? FALSE : TRUE);
     EnableWindow(state.clean_all, state.rows.empty() ? FALSE : TRUE);
     EnableWindow(state.cancel_all, any_running(state) ? TRUE : FALSE);
+    EnableWindow(state.compare_button, state.rows.size() >= 2 ? TRUE : FALSE);
     if (state.empty_hint != nullptr) ShowWindow(state.empty_hint, state.rows.empty() ? SW_SHOW : SW_HIDE);
 }
 
@@ -422,6 +426,7 @@ void update_file_progress(State& state, const std::uint64_t id, const std::uint6
 
 void add_path(State& state, const std::filesystem::path& path);
 void start_file(State& state, const std::uint64_t id);
+void set_compare_mode(State& state, bool enabled);
 
 void add_path(State& state, const std::filesystem::path& path) {
     if (path.empty()) return;
@@ -558,6 +563,7 @@ void delete_selected(State& state) {
         state.rows.erase(state.rows.begin() + index);
         ListView_DeleteItem(state.list, index);
     }
+    if (state.compare_mode && state.rows.size() < 2) set_compare_mode(state, false);
     update_overall_progress(state);
     update_action_buttons(state);
     update_summary(state);
@@ -671,6 +677,7 @@ void show_context_menu(State& state, POINT screen_point) {
 }
 
 void clean_all(State& state) {
+    if (state.compare_mode) set_compare_mode(state, false);
     for (auto& row : state.rows) if (row.job) {
         row.job->cancel->store(true);
         if (row.job->worker.joinable()) row.job->worker.join();
@@ -685,15 +692,60 @@ void clean_all(State& state) {
     update_summary(state);
 }
 
+void set_compare_mode(State& state, const bool enabled) {
+    state.compare_mode = enabled;
+    DWORD styles = ListView_GetExtendedListViewStyle(state.list);
+    if (enabled) {
+        styles |= LVS_EX_CHECKBOXES;
+        SetWindowTextW(state.compare_button, L"Confirm");
+    } else {
+        for (int index = 0; index < static_cast<int>(state.rows.size()); ++index) {
+            ListView_SetCheckState(state.list, index, FALSE);
+        }
+        styles &= ~LVS_EX_CHECKBOXES;
+        SetWindowTextW(state.compare_button, L"Compare");
+    }
+    ListView_SetExtendedListViewStyle(state.list, styles);
+    update_action_buttons(state);
+    RedrawWindow(state.list, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+    RedrawWindow(state.compare_button, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE);
+}
+
+void compare_files(State& state) {
+    std::vector<int> indexes;
+    for (int index = 0; index < static_cast<int>(state.rows.size()); ++index) {
+        if (ListView_GetCheckState(state.list, index)) indexes.push_back(index);
+    }
+    if (indexes.size() != 2) {
+        set_text(state.status, L"Select exactly two files, then click Confirm.");
+        return;
+    }
+    const Row& left = state.rows[static_cast<std::size_t>(indexes[0])];
+    const Row& right = state.rows[static_cast<std::size_t>(indexes[1])];
+    if (left.job || right.job || !left.has_result || !right.has_result) {
+        set_text(state.status, L"Please wait until both files finish hashing.");
+        return;
+    }
+    if (!left.result.error.empty() || !right.result.error.empty() || left.result.cancelled || right.result.cancelled) {
+        set_text(state.status, L"Cannot compare files with a failed or cancelled result.");
+        return;
+    }
+    const bool equal = filehash::hash_results_equal(left.result, right.result);
+    set_text(state.status, equal ? L"Compare result: the two files are identical."
+                                 : L"Compare result: the two files are different.");
+    set_compare_mode(state, false);
+}
+
 void layout(State& state, const int width, const int height) {
     const int content_width = std::max(100, width - 32);
     MoveWindow(state.title, 16, 14, 500, 32, TRUE);
     MoveWindow(state.subtitle, 16, 47, 620, 22, TRUE);
-    MoveWindow(state.add_files, width - 678, 18, 94, 32, TRUE);
-    MoveWindow(state.copy_results, width - 574, 18, 108, 32, TRUE);
-    MoveWindow(state.delete_files, width - 456, 18, 92, 32, TRUE);
-    MoveWindow(state.clean_all, width - 354, 18, 92, 32, TRUE);
-    MoveWindow(state.cancel_all, width - 252, 18, 92, 32, TRUE);
+    MoveWindow(state.add_files, width - 728, 18, 88, 32, TRUE);
+    MoveWindow(state.copy_results, width - 630, 18, 100, 32, TRUE);
+    MoveWindow(state.delete_files, width - 520, 18, 80, 32, TRUE);
+    MoveWindow(state.clean_all, width - 430, 18, 80, 32, TRUE);
+    MoveWindow(state.cancel_all, width - 340, 18, 88, 32, TRUE);
+    MoveWindow(state.compare_button, width - 248, 18, 88, 32, TRUE);
     MoveWindow(state.theme_picker, width - 150, 18, 134, 32, TRUE);
     MoveWindow(state.algorithm_group, 16, 78, content_width, 56, TRUE);
     for (int index = 0; index < 6; ++index) MoveWindow(state.checks[index], 32 + index * 98, 100, 91, 20, TRUE);
@@ -733,13 +785,14 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             state->background = CreateSolidBrush(palette(*state).window_bg);
             state->surface_brush = CreateSolidBrush(palette(*state).surface);
             state->drop_zone_brush = CreateSolidBrush(palette(*state).drop_zone_bg);
-            state->title = CreateWindowW(L"STATIC", L"Lizy File Hash Tool v1.0", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kTitle), nullptr, nullptr);
+            state->title = CreateWindowW(L"STATIC", L"Lizy File Hash Tool v1.1", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kTitle), nullptr, nullptr);
             state->subtitle = CreateWindowW(L"STATIC", L"Fast, local and privacy-first file verification", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kSubtitle), nullptr, nullptr);
             state->add_files = CreateWindowW(L"BUTTON", L"Add files", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kAddFiles), nullptr, nullptr);
             state->copy_results = CreateWindowW(L"BUTTON", L"Copy results", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCopyResults), nullptr, nullptr);
             state->delete_files = CreateWindowW(L"BUTTON", L"Delete", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kDeleteFiles), nullptr, nullptr);
             state->cancel_all = CreateWindowW(L"BUTTON", L"Cancel all", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCancelAll), nullptr, nullptr);
             state->clean_all = CreateWindowW(L"BUTTON", L"Clean all", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCleanAll), nullptr, nullptr);
+            state->compare_button = CreateWindowW(L"BUTTON", L"Compare", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW | WS_DISABLED, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kCompare), nullptr, nullptr);
             state->theme_picker = CreateWindowW(L"BUTTON", L"Theme", WS_CHILD | WS_VISIBLE | BS_OWNERDRAW, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kThemePicker), nullptr, nullptr);
             state->algorithm_group = CreateWindowW(L"STATIC", L"Algorithms", WS_CHILD | WS_VISIBLE | SS_OWNERDRAW, 0, 0, 0, 0, window, nullptr, nullptr, nullptr);
             for (int index = 0; index < 6; ++index) {
@@ -768,7 +821,7 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                                                  OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                                                  DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
             state->status = CreateWindowW(L"STATIC", L"Ready — add files or drag them here", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kStatus), nullptr, nullptr);
-            for (HWND control : {state->title, state->subtitle, state->add_files, state->copy_results, state->delete_files, state->cancel_all, state->clean_all, state->theme_picker, state->algorithm_group, state->drop_hint, state->file_progress_label, state->file_progress, state->progress_label, state->progress, state->list, state->status}) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
+            for (HWND control : {state->title, state->subtitle, state->add_files, state->copy_results, state->delete_files, state->cancel_all, state->clean_all, state->compare_button, state->theme_picker, state->algorithm_group, state->drop_hint, state->file_progress_label, state->file_progress, state->progress_label, state->progress, state->list, state->status}) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
             SendMessageW(state->empty_hint, WM_SETFONT, reinterpret_cast<WPARAM>(state->empty_hint_font), TRUE);
             SendMessageW(state->title, WM_SETFONT, reinterpret_cast<WPARAM>(state->title_font), TRUE);
             for (HWND check : state->checks) SendMessageW(check, WM_SETFONT, reinterpret_cast<WPARAM>(state->font), TRUE);
@@ -784,6 +837,13 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
                 case kDeleteFiles: delete_selected(*state); return 0;
                 case kCancelAll: cancel_all(*state); return 0;
                 case kCleanAll: clean_all(*state); return 0;
+                case kCompare:
+                    if (state->compare_mode) compare_files(*state);
+                    else {
+                        set_compare_mode(*state, true);
+                        set_text(state->status, L"Select exactly two files, then click Confirm.");
+                    }
+                    return 0;
                 case kThemePicker: show_theme_menu(*state); return 0;
                 default:
                     if (LOWORD(wparam) >= kAlgorithmBase && LOWORD(wparam) < kAlgorithmBase + 6 && HIWORD(wparam) == BN_CLICKED) {
@@ -817,7 +877,8 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             }
             if (item->hwndItem == state->add_files || item->hwndItem == state->copy_results ||
                 item->hwndItem == state->delete_files || item->hwndItem == state->cancel_all ||
-                item->hwndItem == state->clean_all || item->hwndItem == state->theme_picker) {
+                item->hwndItem == state->clean_all || item->hwndItem == state->compare_button ||
+                item->hwndItem == state->theme_picker) {
                 draw_button(*state, *item);
                 return TRUE;
             }
@@ -960,7 +1021,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     window_class.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
     RegisterClassW(&window_class);
     State state;
-    const HWND window = CreateWindowExW(0, class_name, L"Lizy File Hash Tool v1.0", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 700, nullptr, nullptr, instance, &state);
+    const HWND window = CreateWindowExW(0, class_name, L"Lizy File Hash Tool v1.1", WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1280, 700, nullptr, nullptr, instance, &state);
     if (window == nullptr) return 1;
     ShowWindow(window, show_command);
     UpdateWindow(window);

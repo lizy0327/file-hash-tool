@@ -49,6 +49,10 @@ int main() {
     assert(format_hex(result.values[3].bytes) == "15e2b0d3c33891ebb0f1ef609ec419420c20e320ce94c65fbc8c3312448eb225");
     assert(format_hex(result.values[4].bytes) == "eb455d56d2c1a69de64e832011f3393d45f3fa31d6842f21af92d2fe469c499da5e3179847334a18479c8d1dedea1be3");
     assert(format_hex(result.values[5].bytes) == "d9e6762dd1c8eaf6d61b3c6192fc408d4d6d5f1176d0c29169bc24e71c3f274ad27fcd5811b313d681f7e55ec02d73d499c95455b6b5bb503acf574fba8ffe85");
+    assert(hash_results_equal(result, result));
+    auto different = result;
+    different.values[1].bytes[0] ^= 0x01u;
+    assert(!hash_results_equal(result, different));
 
     const auto path_two = std::filesystem::temp_directory_path() / "filehash_smoke_abc.txt";
     {

@@ -34,6 +34,9 @@ struct HashFileResult {
     bool cancelled = false;
 };
 
+// 中文：仅比较已计算出的算法值，不比较路径、大小或修改时间；顺序不同也能正确匹配 / English: Compare calculated algorithm values only, ignoring path, size, and modified time; matching is order-independent
+bool hash_results_equal(const HashFileResult& left, const HashFileResult& right) noexcept;
+
 using CancelCheck = std::function<bool()>;
 using ProgressCallback = std::function<void(std::uint64_t bytes_read,
                                             std::uint64_t total_bytes)>;

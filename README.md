@@ -1,4 +1,4 @@
-# Lizy File Hash Tool v1.0
+# Lizy File Hash Tool v1.1
 
 轻量、快速的跨平台文件校验工具。核心使用 C++17 实现，同一文件只读取一次即可同时计算多个算法；多个文件使用独立 worker 并发处理。
 
@@ -14,6 +14,8 @@ A lightweight and fast cross-platform file verification tool. The shared core is
 - Each file has an independent progress bar, plus an overall progress bar for all files.
 - 支持 Delete 键、右键菜单、Clean all、复制单条结果和复制全部结果。
 - Supports the Delete key, a context menu, Clean all, copying one result, and copying all results.
+- 点击 Compare 后可勾选两条记录，点击 Confirm 自动比较已计算的 MD5、SHA 和其他校验结果。
+- Click Compare to select two records, then click Confirm to compare their calculated MD5, SHA, and other hash values.
 - 复制结果包含每个文件的绝对路径、文件名、文件大小、修改时间、状态及各算法结果，每个属性独立一行。
 - Copied results include the absolute path and file name, size, modified time, status, and each algorithm result, with one attribute per line.
 - 无文件时显示“文件拖拽到此处”提示，并使用蓝色钥匙主题图标。
@@ -90,9 +92,9 @@ The application reads files and calculates hashes locally. It does not upload fi
 
 ## 当前状态与限制 / Status and limitations
 
-1.0 版本已完成核心算法、多文件并发、取消语义和原生 GUI。当前仓库发布源码和构建配置，不跟踪 EXE、调试符号或构建目录；尚未提供安装程序，也尚未加入校验值比对工作流。
+1.1 版本在 1.0 的基础上加入两条记录的校验结果比对。当前仓库发布源码和构建配置，不跟踪 EXE、调试符号或构建目录；尚未提供安装程序。
 
-Version 1.0 includes the hashing core, multi-file concurrency, cancellation semantics, and native GUIs. This repository publishes source code and build configuration only; executables, debug symbols, and build directories are not tracked. An installer and hash-comparison workflow are not included yet.
+Version 1.1 adds two-record hash-result comparison on top of the 1.0 hashing core, multi-file concurrency, cancellation semantics, and native GUIs. This repository publishes source code and build configuration only; executables, debug symbols, and build directories are not tracked. An installer is not included yet.
 
 ## 贡献 / Contributing
 

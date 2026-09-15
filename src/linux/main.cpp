@@ -19,7 +19,7 @@
 
 namespace {
 
-enum Column { kIndex, kPath, kStatus, kResult, kColumnCount };
+enum Column { kIndex, kChecked, kPath, kStatus, kResult, kColumnCount };
 const filehash::HashAlgorithm kAlgorithms[] = {
     filehash::HashAlgorithm::Crc32, filehash::HashAlgorithm::Md5, filehash::HashAlgorithm::Sha1,
     filehash::HashAlgorithm::Sha256, filehash::HashAlgorithm::Sha384, filehash::HashAlgorithm::Sha512,
@@ -74,6 +74,7 @@ struct State {
     GtkWidget* delete_button = nullptr;
     GtkWidget* cancel_button = nullptr;
     GtkWidget* clean_button = nullptr;
+    GtkWidget* compare_button = nullptr;
     GtkWidget* theme_combo = nullptr;
     GtkWidget* status = nullptr;
     GtkWidget* file_progress = nullptr;
@@ -83,12 +84,17 @@ struct State {
     GtkWidget* empty_hint = nullptr;
     GtkTreeSelection* selection = nullptr;
     GtkListStore* store = nullptr;
+    GtkWidget* view = nullptr;
+    GtkTreeViewColumn* compare_column = nullptr;
     GtkWidget* checks[6]{};
     GtkCssProvider* css_provider = nullptr;
     filehash::ui::ThemeId theme = filehash::ui::ThemeId::ArcticBlue;
+    bool compare_mode = false;
     std::vector<Row> rows;
     std::uint64_t next_id = 1;
 };
+
+void set_compare_mode(State& state, bool enabled);
 
 std::vector<filehash::HashAlgorithm> selected_algorithms(const State& state) {
     std::vector<filehash::HashAlgorithm> result;
@@ -122,6 +128,7 @@ void update_buttons(State& state) {
     gtk_widget_set_sensitive(state.delete_button, !state.rows.empty());
     gtk_widget_set_sensitive(state.clean_button, !state.rows.empty());
     gtk_widget_set_sensitive(state.cancel_button, any_running(state));
+    gtk_widget_set_sensitive(state.compare_button, state.rows.size() >= 2);
     if (state.empty_hint != nullptr) gtk_widget_set_visible(state.empty_hint, state.rows.empty());
 }
 
@@ -344,6 +351,7 @@ void delete_selected(GtkButton*, gpointer data) {
         gtk_list_store_set(state.store, &iter, kIndex, index++, -1);
         valid = gtk_tree_model_iter_next(GTK_TREE_MODEL(state.store), &iter);
     }
+    if (state.compare_mode && state.rows.size() < 2) set_compare_mode(state, false);
     update_buttons(state);
     update_status(state);
     update_progress(state);
@@ -425,6 +433,7 @@ void select_all(GtkMenuItem*, gpointer data) {
 
 void clean_all(GtkButton*, gpointer data) {
     State& state = *static_cast<State*>(data);
+    if (state.compare_mode) set_compare_mode(state, false);
     for (auto& row : state.rows) if (row.job) {
         row.job->cancel->store(true);
         if (row.job->worker.joinable()) row.job->worker.join();
@@ -437,6 +446,70 @@ void clean_all(GtkButton*, gpointer data) {
     gtk_label_set_text(GTK_LABEL(state.progress_label), "All files  0%");
     update_buttons(state);
     update_status(state);
+}
+
+void set_compare_mode(State& state, const bool enabled) {
+    state.compare_mode = enabled;
+    if (enabled) {
+        gtk_tree_view_column_set_visible(state.compare_column, TRUE);
+        gtk_button_set_label(GTK_BUTTON(state.compare_button), "Confirm");
+        set_status(state, "Select exactly two files, then click Confirm.");
+    } else {
+        GtkTreeIter iter;
+        gboolean valid = gtk_tree_model_get_iter_first(GTK_TREE_MODEL(state.store), &iter);
+        while (valid) {
+            gtk_list_store_set(state.store, &iter, kChecked, FALSE, -1);
+            valid = gtk_tree_model_iter_next(GTK_TREE_MODEL(state.store), &iter);
+        }
+        gtk_tree_view_column_set_visible(state.compare_column, FALSE);
+        gtk_button_set_label(GTK_BUTTON(state.compare_button), "Compare");
+    }
+    update_buttons(state);
+}
+
+void compare_files(GtkButton*, gpointer data) {
+    State& state = *static_cast<State*>(data);
+    std::vector<int> indexes;
+    GtkTreeIter iter;
+    gboolean valid = gtk_tree_model_get_iter_first(GTK_TREE_MODEL(state.store), &iter);
+    while (valid) {
+        gboolean checked = FALSE;
+        unsigned int index = 0;
+        gtk_tree_model_get(GTK_TREE_MODEL(state.store), &iter, kIndex, &index, kChecked, &checked, -1);
+        if (checked) indexes.push_back(static_cast<int>(index));
+        valid = gtk_tree_model_iter_next(GTK_TREE_MODEL(state.store), &iter);
+    }
+    if (indexes.size() != 2) {
+        set_status(state, "Select exactly two files, then click Confirm.");
+        return;
+    }
+    const Row& left = state.rows[static_cast<std::size_t>(indexes[0])];
+    const Row& right = state.rows[static_cast<std::size_t>(indexes[1])];
+    if (left.job || right.job || !left.has_result || !right.has_result) {
+        set_status(state, "Please wait until both files finish hashing.");
+        return;
+    }
+    if (!left.result.error.empty() || !right.result.error.empty() || left.result.cancelled || right.result.cancelled) {
+        set_status(state, "Cannot compare files with a failed or cancelled result.");
+        return;
+    }
+    set_status(state, filehash::hash_results_equal(left.result, right.result)
+                          ? "Compare result: the two files are identical."
+                          : "Compare result: the two files are different.");
+    set_compare_mode(state, false);
+}
+
+void compare_toggled(GtkCellRendererToggle*, gchar* path_text, gpointer data) {
+    State& state = *static_cast<State*>(data);
+    if (!state.compare_mode) return;
+    GtkTreePath* path = gtk_tree_path_new_from_string(path_text);
+    GtkTreeIter iter;
+    if (path != nullptr && gtk_tree_model_get_iter(GTK_TREE_MODEL(state.store), &iter, path)) {
+        gboolean checked = FALSE;
+        gtk_tree_model_get(GTK_TREE_MODEL(state.store), &iter, kChecked, &checked, -1);
+        gtk_list_store_set(state.store, &iter, kChecked, checked ? FALSE : TRUE, -1);
+    }
+    if (path != nullptr) gtk_tree_path_free(path);
 }
 
 gboolean on_key_press(GtkWidget*, GdkEventKey* event, gpointer data) {
@@ -460,7 +533,7 @@ gboolean on_button_press(GtkWidget* widget, GdkEventButton* event, gpointer data
     gint* indices = gtk_tree_path_get_indices(path);
     const int index = indices ? indices[0] : -1;
     if (event->button == 1) {
-        copy_row(state, index);
+        if (!state.compare_mode) copy_row(state, index);
         gtk_tree_path_free(path);
         return FALSE;
     }
@@ -606,7 +679,7 @@ int main(int argc, char** argv) {
     State state;
     state.theme = load_theme();
     state.window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    gtk_window_set_title(GTK_WINDOW(state.window), "Lizy File Hash Tool v1.0");
+    gtk_window_set_title(GTK_WINDOW(state.window), "Lizy File Hash Tool v1.1");
     gtk_window_set_default_size(GTK_WINDOW(state.window), 1200, 700);
     g_signal_connect(state.window, "delete-event", G_CALLBACK(on_close), &state);
 
@@ -621,7 +694,7 @@ int main(int argc, char** argv) {
     gtk_box_pack_start(GTK_BOX(root), header, FALSE, FALSE, 0);
     GtkWidget* heading = gtk_box_new(GTK_ORIENTATION_VERTICAL, 2);
     gtk_box_pack_start(GTK_BOX(header), heading, TRUE, TRUE, 0);
-    GtkWidget* title = gtk_label_new("Lizy File Hash Tool v1.0");
+    GtkWidget* title = gtk_label_new("Lizy File Hash Tool v1.1");
     GtkWidget* subtitle = gtk_label_new("Fast, local and privacy-first file verification");
     gtk_style_context_add_class(gtk_widget_get_style_context(title), "title");
     gtk_style_context_add_class(gtk_widget_get_style_context(subtitle), "subtitle");
@@ -635,10 +708,12 @@ int main(int argc, char** argv) {
     state.delete_button = gtk_button_new_with_label("Delete");
     state.cancel_button = gtk_button_new_with_label("Cancel all");
     state.clean_button = gtk_button_new_with_label("Clean all");
+    state.compare_button = gtk_button_new_with_label("Compare");
     gtk_widget_set_sensitive(state.copy_button, FALSE);
     gtk_widget_set_sensitive(state.delete_button, FALSE);
     gtk_widget_set_sensitive(state.cancel_button, FALSE);
     gtk_widget_set_sensitive(state.clean_button, FALSE);
+    gtk_widget_set_sensitive(state.compare_button, FALSE);
     gtk_style_context_add_class(gtk_widget_get_style_context(add), "primary");
     gtk_style_context_add_class(gtk_widget_get_style_context(state.delete_button), "danger");
     GtkWidget* actions = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
@@ -648,6 +723,7 @@ int main(int argc, char** argv) {
     gtk_box_pack_start(GTK_BOX(actions), state.delete_button, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(actions), state.clean_button, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(actions), state.cancel_button, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(actions), state.compare_button, FALSE, FALSE, 0);
     state.theme_combo = gtk_combo_box_text_new();
     for (const auto& theme : filehash::ui::kThemes) {
         gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(state.theme_combo), theme.name);
@@ -659,6 +735,7 @@ int main(int argc, char** argv) {
     g_signal_connect(state.delete_button, "clicked", G_CALLBACK(delete_selected), &state);
     g_signal_connect(state.cancel_button, "clicked", G_CALLBACK(cancel_all), &state);
     g_signal_connect(state.clean_button, "clicked", G_CALLBACK(clean_all), &state);
+    g_signal_connect(state.compare_button, "clicked", G_CALLBACK(compare_files), &state);
     g_signal_connect(state.theme_combo, "changed", G_CALLBACK(theme_changed), &state);
 
     GtkWidget* algorithms = gtk_frame_new("Algorithms");
@@ -698,8 +775,9 @@ int main(int argc, char** argv) {
     gtk_box_pack_start(GTK_BOX(progress_box), state.progress, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(root), progress_box, FALSE, FALSE, 0);
 
-    state.store = gtk_list_store_new(kColumnCount, G_TYPE_UINT, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING);
+    state.store = gtk_list_store_new(kColumnCount, G_TYPE_UINT, G_TYPE_BOOLEAN, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING);
     GtkWidget* view = gtk_tree_view_new_with_model(GTK_TREE_MODEL(state.store));
+    state.view = view;
     state.selection = gtk_tree_view_get_selection(GTK_TREE_VIEW(view));
     gtk_tree_selection_set_mode(state.selection, GTK_SELECTION_MULTIPLE);
     gtk_tree_view_set_grid_lines(GTK_TREE_VIEW(view), GTK_TREE_VIEW_GRID_LINES_BOTH);
@@ -707,6 +785,13 @@ int main(int argc, char** argv) {
     gtk_tree_view_set_enable_search(GTK_TREE_VIEW(view), TRUE);
     g_signal_connect(view, "key-press-event", G_CALLBACK(on_key_press), &state);
     g_signal_connect(view, "button-press-event", G_CALLBACK(on_button_press), &state);
+    GtkCellRenderer* toggle_renderer = gtk_cell_renderer_toggle_new();
+    state.compare_column = gtk_tree_view_column_new_with_attributes("", toggle_renderer, "active", kChecked, nullptr);
+    gtk_tree_view_column_set_sizing(state.compare_column, GTK_TREE_VIEW_COLUMN_FIXED);
+    gtk_tree_view_column_set_fixed_width(state.compare_column, 34);
+    gtk_tree_view_append_column(GTK_TREE_VIEW(view), state.compare_column);
+    g_signal_connect(toggle_renderer, "toggled", G_CALLBACK(compare_toggled), &state);
+    gtk_tree_view_column_set_visible(state.compare_column, FALSE);
     const char* titles[] = {"File", "Status", "Hash values"};
     const int columns[] = {kPath, kStatus, kResult};
     for (int index = 0; index < 3; ++index) {

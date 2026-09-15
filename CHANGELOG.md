@@ -18,6 +18,18 @@
 - Unifies semantic colors for the primary action, destructive action, disabled state, progress bars, selected rows, and results table.
 - Deepens the Arctic Blue layers so the default theme no longer looks like a near-white interface.
 
+## 1.1.0 — 2026-09-15
+
+### 中文
+
+- 新增 Compare / Confirm 流程，可选择两条记录并根据已计算的校验值判断文件是否一致。
+- 比较只依据校验结果，不将文件路径、大小或修改时间作为内容一致性的判断依据。
+
+### English
+
+- Adds a Compare / Confirm flow for selecting two records and checking whether their calculated hash values match.
+- Comparison uses hash results only; file paths, sizes, and modified times are not used as content-equality criteria.
+
 ## 1.0.0 — 2026-09-10
 
 ### 中文
