@@ -119,6 +119,7 @@ struct State {
     HBRUSH background = nullptr;
     HBRUSH surface_brush = nullptr;
     HBRUSH drop_zone_brush = nullptr;
+    WNDPROC list_original_proc = nullptr;
     filehash::ui::ThemeId theme = filehash::ui::ThemeId::ArcticBlue;
     filehash::ui::Language language = filehash::ui::Language::Chinese;
     // 中文：显式保存复选框状态，确保自绘控件在 Windows 7/10/11 上一致显示 / English: Keep checkbox state explicitly so owner-drawn controls render consistently on Windows 7/10/11
@@ -855,6 +856,47 @@ void layout(State& state, const int width, const int height) {
     ListView_SetColumnWidth(state.list, 2, std::max(240, content_width * 68 / 100 - 105));
 }
 
+int list_row_at_point(HWND list, POINT point, LVHITTESTINFO* hit_info) {
+    LVHITTESTINFO hit{};
+    hit.pt = point;
+    const int hit_index = ListView_SubItemHitTest(list, &hit);
+    if (hit_info != nullptr) *hit_info = hit;
+    if (hit_index >= 0) return hit_index;
+
+    // 中文：补充整行的垂直命中判断，覆盖文件名后面的空白区域 / English: Use row bounds as a fallback so blank space after a file name remains clickable.
+    const int count = ListView_GetItemCount(list);
+    for (int index = 0; index < count; ++index) {
+        RECT row_rect{};
+        if (ListView_GetItemRect(list, index, &row_rect, LVIR_BOUNDS) &&
+            point.y >= row_rect.top && point.y < row_rect.bottom) {
+            return index;
+        }
+    }
+    return -1;
+}
+
+LRESULT CALLBACK list_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
+    auto* state = reinterpret_cast<State*>(GetWindowLongPtrW(window, GWLP_USERDATA));
+    if (state != nullptr && message == WM_LBUTTONDOWN && state->compare_mode) {
+        const POINT point{
+            static_cast<SHORT>(LOWORD(lparam)),
+            static_cast<SHORT>(HIWORD(lparam)),
+        };
+        LVHITTESTINFO hit{};
+        const int index = list_row_at_point(window, point, &hit);
+        if (index >= 0 && (hit.flags & LVHT_ONITEMSTATEICON) == 0) {
+            ListView_SetCheckState(window, index, !ListView_GetCheckState(window, index));
+            ListView_SetItemState(window, -1, 0, LVIS_SELECTED);
+            ListView_SetItemState(window, index, LVIS_SELECTED, LVIS_SELECTED);
+            return 0;
+        }
+    }
+    if (state != nullptr && state->list_original_proc != nullptr) {
+        return CallWindowProcW(state->list_original_proc, window, message, wparam, lparam);
+    }
+    return DefWindowProcW(window, message, wparam, lparam);
+}
+
 LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
     auto* state = reinterpret_cast<State*>(GetWindowLongPtrW(window, GWLP_USERDATA));
     if (message == WM_NCCREATE) {
@@ -900,6 +942,9 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             SendMessageW(state->progress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
             state->list = CreateWindowW(WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | LVS_REPORT | LVS_SHOWSELALWAYS, 0, 0, 0, 0, window, reinterpret_cast<HMENU>(kList), nullptr, nullptr);
             ListView_SetExtendedListViewStyle(state->list, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+            SetWindowLongPtrW(state->list, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
+            state->list_original_proc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(
+                state->list, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(list_window_proc)));
             const wchar_t* columns[] = {L"File", L"Status", L"Hash values"};
             const int widths[] = {420, 105, 700};
             for (int index = 0; index < 3; ++index) {
@@ -1012,15 +1057,10 @@ LRESULT CALLBACK window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lp
             if (reinterpret_cast<NMHDR*>(lparam)->hwndFrom == state->list && reinterpret_cast<NMHDR*>(lparam)->code == NM_CLICK) {
                 const auto* click = reinterpret_cast<NMLISTVIEW*>(lparam);
                 if (state->compare_mode) {
-                    LVHITTESTINFO hit{};
-                    hit.pt = click->ptAction;
-                    ListView_SubItemHitTest(state->list, &hit);
-                    if ((hit.flags & LVHT_ONITEMSTATEICON) == 0) {
-                        ListView_SetCheckState(state->list, click->iItem,
-                                               !ListView_GetCheckState(state->list, click->iItem));
-                    }
                     ListView_SetItemState(state->list, -1, 0, LVIS_SELECTED);
-                    ListView_SetItemState(state->list, click->iItem, LVIS_SELECTED, LVIS_SELECTED);
+                    if (click->iItem >= 0) {
+                        ListView_SetItemState(state->list, click->iItem, LVIS_SELECTED, LVIS_SELECTED);
+                    }
                 } else {
                     copy_row(*state, click->iItem);
                 }
